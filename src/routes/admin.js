@@ -776,6 +776,10 @@ router.post('/applications/:id/company', asyncHandler(async (req, res) => {
     if (companyRows.rows.length === 0) {
       return res.status(404).json({ error: 'Company not found' });
     }
+    const targetCompany = companyRows.rows[0];
+    if (req.admin.unitScope !== 'ALL' && targetCompany.business_unit !== req.admin.unitScope) {
+      return res.status(403).json({ error: 'Cannot assign a company outside your business unit' });
+    }
   }
 
   const { rows } = await db.query(
