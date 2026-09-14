@@ -281,7 +281,10 @@ router.get('/applications', asyncHandler(async (req, res) => {
   const status = req.query.status ? String(req.query.status) : null;
   const bu = effectiveBusinessUnitFilter(req.admin, req.query.business_unit);
 
-  const conditions = [];
+  // Draft applications are the candidate's own in-progress work and have
+  // not been submitted — admins and business unit managers must never see
+  // them, regardless of business unit scope or the status filter chosen.
+  const conditions = [`status != 'draft'`];
   const values = [];
   let i = 1;
 
@@ -289,7 +292,7 @@ router.get('/applications', asyncHandler(async (req, res) => {
     conditions.push(`business_unit = $${i++}`);
     values.push(bu);
   }
-  if (status && ALL_KNOWN_STATUSES.includes(status)) {
+  if (status && status !== 'draft' && ALL_KNOWN_STATUSES.includes(status)) {
     conditions.push(`status = $${i++}`);
     values.push(status);
   }
@@ -319,8 +322,12 @@ router.get('/applications', asyncHandler(async (req, res) => {
 // GET /api/admin/stats  (rpc_admin_get_stats)
 router.get('/stats', asyncHandler(async (req, res) => {
   const bu = effectiveBusinessUnitFilter(req.admin, req.query.business_unit);
-  const whereSql = bu ? 'WHERE business_unit = $1' : '';
-  const values = bu ? [bu] : [];
+  // Same draft exclusion as /applications — stats shown to admins/BU
+  // managers must not reflect applications that haven't been submitted.
+  const conditions = [`status != 'draft'`];
+  const values = [];
+  if (bu) { values.push(bu); conditions.push(`business_unit = $${values.length}`); }
+  const whereSql = `WHERE ${conditions.join(' AND ')}`;
 
   const totalResult = await db.query(`SELECT count(*)::int AS total FROM applications ${whereSql}`, values);
   const byStatusResult = await db.query(
@@ -357,8 +364,11 @@ router.get('/exit-interviews/pending-count', asyncHandler(async (req, res) => {
 // GET /api/admin/export  (rpc_admin_export_all — applications LEFT JOIN onboarding_records)
 router.get('/export', asyncHandler(async (req, res) => {
   const bu = effectiveBusinessUnitFilter(req.admin, req.query.business_unit);
-  const whereSql = bu ? 'WHERE a.business_unit = $1' : '';
-  const values = bu ? [bu] : [];
+  // Exports must not leak candidates' unsubmitted draft applications either.
+  const conditions = [`a.status != 'draft'`];
+  const values = [];
+  if (bu) { values.push(bu); conditions.push(`a.business_unit = $${values.length}`); }
+  const whereSql = `WHERE ${conditions.join(' AND ')}`;
 
   const { rows } = await db.query(
     `SELECT a.*,
@@ -401,7 +411,10 @@ router.get('/companies', asyncHandler(async (req, res) => {
 // ============================================================================
 
 async function fetchScopedApplication(req, res) {
-  const { rows } = await db.query('SELECT * FROM applications WHERE id = $1', [req.params.id]);
+  // A draft is not visible to admin/BU-manager views at all (see /applications,
+  // /stats, /export above) — 404 here too rather than 200'ing a record no
+  // listing endpoint would ever surface, in case a draft's id is guessed directly.
+  const { rows } = await db.query("SELECT * FROM applications WHERE id = $1 AND status != 'draft'", [req.params.id]);
   if (rows.length === 0) {
     res.status(404).json({ error: 'Application not found' });
     return null;
