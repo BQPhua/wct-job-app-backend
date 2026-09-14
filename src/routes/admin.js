@@ -402,7 +402,7 @@ router.get('/companies', asyncHandler(async (req, res) => {
   const bu = effectiveBusinessUnitFilter(req.admin, req.query.business_unit);
   const whereSql = bu ? 'WHERE business_unit = $1' : '';
   const values = bu ? [bu] : [];
-  const { rows } = await db.query(`SELECT id, name FROM companies ${whereSql} ORDER BY name`, values);
+  const { rows } = await db.query(`SELECT id, name, category FROM companies ${whereSql} ORDER BY category NULLS LAST, name`, values);
   return res.json(rows);
 }));
 
