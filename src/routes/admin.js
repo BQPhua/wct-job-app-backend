@@ -370,7 +370,7 @@ router.get('/export', asyncHandler(async (req, res) => {
   if (bu) { values.push(bu); conditions.push(`a.business_unit = $${values.length}`); }
   const whereSql = `WHERE ${conditions.join(' AND ')}`;
 
-  const { rows } = await db.query(
+    const { rows } = await db.query(
     `SELECT a.*,
             o.status              AS ob_status,
             o.epf_no              AS ob_epf_no,
@@ -380,14 +380,28 @@ router.get('/export', asyncHandler(async (req, res) => {
             o.bank_account_no     AS ob_bank_account_no,
             o.cidb_green_card_no  AS ob_cidb_green_card_no,
             o.cidb_branch         AS ob_cidb_branch,
-            o.spouse_name, o.spouse_nric, o.spouse_date_of_birth, o.spouse_working,
-            o.children_below_18, o.children_18_to_23,
-            o.emergency_contacts, o.beneficiary_name, o.beneficiary_relationship, o.beneficiary_contact,
-            o.tp3_data,
-            o.salary_company, o.salary_bank, o.salary_branch, o.salary_account_no, o.salary_ic_submitted,
-            o.personal_details_confirmed, o.personal_details_confirmed_at,
-            o.tp3_confirmed, o.tp3_confirmed_at,
-            o.salary_crediting_confirmed, o.salary_crediting_confirmed_at
+            o.spouse_name        AS ob_spouse_name,
+            o.spouse_nric        AS ob_spouse_nric,
+            o.spouse_date_of_birth AS ob_spouse_date_of_birth,
+            o.spouse_working     AS ob_spouse_working,
+            o.children_below_18  AS ob_children_below_18,
+            o.children_18_to_23  AS ob_children_18_to_23,
+            o.emergency_contacts AS ob_emergency_contacts,
+            o.beneficiary_name   AS ob_beneficiary_name,
+            o.beneficiary_relationship AS ob_beneficiary_relationship,
+            o.beneficiary_contact AS ob_beneficiary_contact,
+            o.tp3_data           AS ob_tp3_data,
+            o.salary_company     AS ob_salary_company,
+            o.salary_bank        AS ob_salary_bank,
+            o.salary_branch      AS ob_salary_branch,
+            o.salary_account_no  AS ob_salary_account_no,
+            o.salary_ic_submitted AS ob_salary_ic_submitted,
+            o.personal_details_confirmed    AS ob_personal_details_confirmed,
+            o.personal_details_confirmed_at AS ob_personal_details_confirmed_at,
+            o.tp3_confirmed      AS ob_tp3_confirmed,
+            o.tp3_confirmed_at   AS ob_tp3_confirmed_at,
+            o.salary_crediting_confirmed    AS ob_salary_crediting_confirmed,
+            o.salary_crediting_confirmed_at AS ob_salary_crediting_confirmed_at
        FROM applications a
        LEFT JOIN onboarding_records o ON o.application_id = a.id
        ${whereSql}
