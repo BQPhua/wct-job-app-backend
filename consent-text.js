@@ -1,0 +1,45 @@
+// Bilingual text for the two consent documents, sourced from the company's
+// existing JTS Checks Candidate Consent & Release and WCT PDPA Notice.
+
+const CONSENT_TEXT = {
+  EN: {
+    jtsTitle: "Candidate's Certificate and Release",
+    jtsBody: `
+      <p>I hereby grant consent to <strong>JTS Checks Sdn Bhd (1157487-M)</strong>, a background screening company, to conduct background screening as part of the recruitment process of JTS Checks Sdn Bhd's client with whom I am seeking employment opportunities. I hereby grant consent to the Company to release the Report, which consists of the screening results, to the Client.</p>
+      <p>All information provided by me in support of my application for employment is true and correct to the best of my knowledge. I understand that misrepresentation or omission will constitute sufficient grounds for rejection or for subsequent dismissal if I am hired.</p>
+      <p>I hereby consent and authorize any former employer, educational institution, person, firm, corporation, consumer or credit reporting agency, or government agency to answer any and all questions and to release or provide any information within their knowledge or record, and I agree to hold any or all of them blameless and free of any liability for releasing any truthful information that is within their knowledge or records. I also agree to hold the Company blameless and free of any liability for using any information received from such parties in making an employment decision regarding me.</p>
+      <p>The Company is authorized to release the screening results to the Client to whom this consent applies. In the event of any future background screening request by the same Client, this authorization shall remain valid unless expressly revoked by me in writing. I agree to hold the Company blameless and free of any liability for using or disclosing such information, provided it is done in accordance with applicable data protection laws and solely for the purpose stated in this consent.</p>
+      <p><strong>Acknowledgement and Release</strong> — I acknowledge receipt of this letter. I release the Company and its employees and agents from all liability relating to obtaining and using such information solely and only for the purpose of being evaluated for a recruitment position. I authorize all companies, educational institutions, organizations and other persons to provide such information to the Company and its agents and release them from all liability relating to the obtaining, release and use of such information.</p>
+    `,
+    pdpaTitle: "Consent to Process Personal Data and Personal Data Protection Notice",
+    pdpaBody: `
+      <p>This Notice is issued by and/or on behalf of WCT Holdings Berhad, its related companies, affiliates and other entities within the WCT group of companies ("WCT Group") pursuant to the Personal Data Protection Act 2010.</p>
+      <p><strong>Source and Description of Personal Data.</strong> We have collected and/or will be collecting personal data as disclosed by / collected from you which may include your personal details (name, date of birth, gender, race, NRIC/passport no., marital status, nationality), contact information, as well as your educational, professional, occupational, financial, familial, medical details, biometric data and/or any other information you provide to us.</p>
+      <p><strong>Purpose and Disclosure.</strong> Your Data is processed for purposes such as considering entering into a contract with you, fulfilling contractual obligations, and administering our relationship. Your Data may be disclosed to another company within the WCT Group, or to agents, professional advisors, third-party service providers, contractors, vendors, and relevant governmental or regulatory authorities as necessary to fulfil these purposes.</p>
+      <p><strong>Access, Correction, Inquiry and/or Complaint.</strong> You have the right to request access to your Data and to request correction. Contact the Corporate Affairs Manager at 03-78066688 or email pdpa@wct.my.</p>
+      <p><strong>Consent and Choice.</strong> Save for Data necessary for the performance of a contract between us, you may choose whether to provide your Data, and may withdraw or limit consent at any time by completing the Withdrawal Form at www.wct.com.my/pdpa.</p>
+      <p><strong>Transfer of Personal Data.</strong> We may transfer your Data to a place outside Malaysia and, by consenting below, you agree to such transfer.</p>
+    `,
+    agreeLabel: "I confirm I have read and understood the above and I give my consent."
+  },
+  BM: {
+    jtsTitle: "Surat Kebenaran dan Pelepasan Maklumat Calon",
+    jtsBody: `
+      <p>Saya dengan ini memberikan kebenaran kepada <strong>JTS CHECKS SDN BHD (1157487-M)</strong>, sebuah syarikat saringan latar belakang, untuk menjalankan saringan latar belakang sebagai sebahagian daripada proses pengambilan pekerja oleh pelanggan JTS Checks Sdn Bhd yang mana saya sedang memohon pekerjaan. Saya juga memberikan kebenaran kepada Syarikat untuk melepaskan Laporan yang mengandungi keputusan saringan kepada Pelanggan.</p>
+      <p>Segala maklumat yang saya berikan bagi menyokong permohonan pekerjaan saya adalah benar dan tepat setakat pengetahuan saya. Saya faham bahawa sebarang penipuan atau maklumat yang tidak lengkap akan menjadi alasan yang mencukupi untuk penolakan permohonan atau pemecatan sekiranya saya diambil bekerja.</p>
+      <p>Saya dengan ini memberikan kebenaran dan kuasa kepada mana-mana bekas majikan, institusi pendidikan, individu, syarikat, agensi pengguna atau agensi laporan kredit, atau agensi kerajaan untuk menjawab sebarang pertanyaan dan memberikan sebarang maklumat yang berada dalam pengetahuan atau rekod mereka, dan saya bersetuju untuk tidak menyalahkan mereka atas sebarang liabiliti berkaitan pelepasan maklumat yang benar. Saya juga bersetuju untuk tidak menyalahkan Syarikat daripada sebarang liabiliti atas penggunaan sebarang maklumat yang diterima daripada pihak-pihak tersebut dalam membuat keputusan pengambilan pekerja terhadap saya.</p>
+      <p>Syarikat diberi kuasa untuk melepaskan keputusan saringan kepada Pelanggan yang berkaitan dengan kebenaran ini. Sekiranya terdapat permintaan saringan latar belakang pada masa hadapan oleh Pelanggan yang sama, kebenaran ini kekal sah melainkan saya menarik balik secara bertulis.</p>
+      <p><strong>Pengakuan dan Pelepasan</strong> — Saya mengakui penerimaan surat ini. Saya membebaskan Syarikat serta pekerja dan ejennya daripada sebarang liabiliti berkaitan dengan pemerolehan dan penggunaan maklumat tersebut semata-mata untuk tujuan penilaian dalam proses pengambilan pekerja. Saya memberi kuasa kepada semua syarikat, institusi pendidikan, organisasi dan individu lain untuk memberikan maklumat tersebut kepada Syarikat dan ejennya.</p>
+    `,
+    pdpaTitle: "Mengizinkan Proses Data Peribadi dan Notis Perlindungan Data Peribadi",
+    pdpaBody: `
+      <p>Notis ini dikeluarkan oleh dan/atau bagi pihak WCT Holdings Berhad, syarikat-syarikat yang berkaitan, ahli-ahli gabungan dan entiti-entiti lain dalam kumpulan syarikat WCT ("Kumpulan WCT") selaras dengan Akta Perlindungan Data Peribadi 2010.</p>
+      <p><strong>Sumber dan Deskripsi Data Peribadi.</strong> Kami telah mengumpul dan/atau akan mengumpul data peribadi seperti yang dizahirkan oleh/dikumpul daripada anda, termasuk butir-butir peribadi (nama, tarikh lahir, jantina, bangsa, nombor kad pengenalan/pasport, status perkahwinan, kewarganegaraan), maklumat hubungan, pendidikan, profesional, pekerjaan, kewangan, keluarga, perubatan, data biometrik dan/atau maklumat lain yang anda berikan.</p>
+      <p><strong>Maksud dan Penzahiran.</strong> Data anda diproses untuk maksud seperti pertimbangan memasuki kontrak dengan anda, memenuhi obligasi kontrak, dan mentadbir hubungan kami. Data anda mungkin dizahirkan kepada syarikat lain dalam Kumpulan WCT, ejen, penasihat profesional, pembekal perkhidmatan pihak ketiga, kontraktor, pembekal, dan pihak berkuasa kerajaan yang berkaitan.</p>
+      <p><strong>Akses, Pembetulan, Siasatan dan/atau Aduan.</strong> Anda berhak meminta akses kepada Data anda dan meminta pembetulan. Hubungi Pengurus Hal Ehwal Korporat di 03-7806688 atau e-mel pdpa@wct.my.</p>
+      <p><strong>Persetujuan dan Pilihan.</strong> Kecuali untuk Data yang perlu bagi pelaksanaan kontrak, anda boleh memilih sama ada untuk memberi Data anda, dan boleh menarik balik atau menghadkan persetujuan pada bila-bila masa melalui www.wct.com.my/pdpa.</p>
+      <p><strong>Pemindahan Data Peribadi.</strong> Kami boleh memindahkan Data anda ke tempat di luar Malaysia dan, dengan bersetuju di bawah, anda bersetuju dengan pemindahan tersebut.</p>
+    `,
+    agreeLabel: "Saya mengesahkan telah membaca dan memahami perkara di atas dan memberi persetujuan saya."
+  }
+};
