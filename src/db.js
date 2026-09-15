@@ -15,7 +15,22 @@
 // ============================================================================
 
 require('dotenv').config();
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// `pg`'s default type parser for a bare `date` column (OID 1082 — no time
+// component, e.g. date_of_birth, spouse_date_of_birth, date_available_to_start,
+// date_joined, official_last_day, actual_last_day) parses it into a JS Date
+// object at UTC midnight. Once that goes through JSON.stringify() in any
+// `res.json(...)` response, it turns "1990-05-01" into "1990-05-01T00:00:00.000Z"
+// — which is NOT a valid value for an HTML `<input type="date">`, so the
+// browser silently renders the field blank rather than erroring. This is
+// exactly the bug reported for onboarding's Spouse Date of Birth field: save
+// → move to the next section → come back, and the date "disappeared" (it
+// didn't — it just no longer matched the yyyy-mm-dd the input requires).
+// Registering this parser makes `pg` return the column's own "yyyy-mm-dd"
+// wire text unchanged, instead of a Date object, fixing every `date` column
+// in the schema at once rather than patching each call site individually.
+types.setTypeParser(types.builtins.DATE, (val) => val);
 
 const sslMode = (process.env.PGSSLMODE || 'require').toLowerCase();
 const ssl = sslMode === 'disable' ? false : { rejectUnauthorized: false };
