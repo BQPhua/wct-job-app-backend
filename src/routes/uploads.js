@@ -34,7 +34,11 @@ const { requireCandidateAuth } = require('../middleware/auth');
 const router = express.Router();
 router.use(requireCandidateAuth);
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10MB — resumes/photos, not video
+const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8MB per file — kept in lockstep with
+// the client-side check in job-app/app.js (MAX_UPLOAD_BYTES). This is the
+// backstop: the frontend already rejects an oversized file before it starts
+// uploading, but this limit still applies to any other client hitting the
+// API directly.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FILE_BYTES } });
 
 // SAS URL lifetime for uploaded files. Long-lived by design, since these
@@ -131,6 +135,12 @@ router.post('/attachment', upload.single('file'), asyncHandler(async (req, res) 
 // try/catch shape in a way Express needs a dedicated error middleware for.
 router.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      const maxMb = Math.round(MAX_FILE_BYTES / (1024 * 1024));
+      return res.status(400).json({
+        error: `File exceeds the ${maxMb}MB upload limit. Please compress it into a ZIP file and upload that instead.`,
+      });
+    }
     return res.status(400).json({ error: `Upload error: ${err.message}` });
   }
   return next(err);
