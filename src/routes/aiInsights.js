@@ -119,11 +119,21 @@ router.post('/', asyncHandler(async (req, res) => {
       "doesn't meet them. If `role_description` is absent or empty, judge general employability " +
       'based on qualifications, experience, and stated expectations instead (using ' +
       '`position_applying`, if present, only as general context, not as a requirements spec), ' +
-      "and don't assume requirements that weren't actually given. " +
-      'Start your response with "Recommendation: <status>" on its own line, then a short ' +
-      '(3-5 sentence) justification referencing specific details from the data. Do not invent ' +
-      'qualifications, experience, or details not present in the data. This is a recommendation ' +
-      'for a human to review, not a final decision.\n\n' +
+      "and don't assume requirements that weren't actually given.\n\n" +
+      'Respond in EXACTLY this structure, with these four labeled sections in this order and ' +
+      'no other text before, between, or after them:\n' +
+      'Recommendation: <Shortlist, KIV, or Reject>\n' +
+      'Pros:\n' +
+      '- <one specific strength, referencing an actual detail from the data>\n' +
+      '- <repeat for each additional strength — at least 1, at most 5>\n' +
+      'Cons:\n' +
+      '- <one specific concern, gap, or risk, referencing an actual detail from the data — or ' +
+      'the single line "- None identified." if there genuinely are none>\n' +
+      '- <repeat for each additional concern — at most 5>\n' +
+      'Summary: <one short (2-3 sentence) overall justification tying the pros/cons together>\n\n' +
+      'Every Pros/Cons bullet must reference something actually present in the data below — do ' +
+      'not invent qualifications, experience, or details that are not there. This is a ' +
+      'recommendation for a human to review, not a final decision.\n\n' +
       'Candidate data:\n' + JSON.stringify(data);
     requestParts = [{ text: prompt }];
   } else if (mode === 'candidate_qa') {
