@@ -77,6 +77,19 @@ async function notify(eventKey, payload) {
     return;
   }
 
+  // Guard against firing a webhook whose flow will just bounce back with a
+  // Power Automate "Bad Request - To Field cannot be null or empty" (e.g.
+  // the 'submit' flow's "Send an email (V2)" step, bound to
+  // `notify_email`). Any payload that carries a `notify_email` key with a
+  // blank value means we resolved zero recipients for this event (no BU
+  // admin, no manager configured, etc.) — better to skip and log than to
+  // send a request we already know the connector will reject.
+  if (Object.prototype.hasOwnProperty.call(payload, 'notify_email') && !payload.notify_email) {
+    // eslint-disable-next-line no-console
+    console.warn(`powerAutomate.notify: "${eventKey}" has no resolved notify_email — skipping webhook call to avoid a connector "To" error`);
+    return;
+  }
+
   try {
     const res = await fetch(url, {
       method: 'POST',
