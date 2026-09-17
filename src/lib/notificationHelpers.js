@@ -36,7 +36,22 @@ async function getManagerEmail(businessUnit) {
   return (rows[0] && rows[0].email) || '';
 }
 
-/** Distinct active bu_admin emails for a business unit (mirrors the original `_get_bu_admin_emails`). */
+/**
+ * Distinct active bu_admin emails for a business unit (mirrors the original
+ * `_get_bu_admin_emails`).
+ *
+ * FALLBACK (added 2026-09-17): `admin_grants` enforces
+ * `(role = 'super_admin' AND business_unit IS NULL)` — a super_admin grant
+ * can never carry a business_unit, so it can never match this query's
+ * `business_unit = $1` filter. If a business unit has no dedicated,
+ * *active* bu_admin assigned (e.g. E&C in production right now), the query
+ * above returns zero rows, `notifyEmails.join(';')` becomes `''`, and the
+ * downstream Power Automate "Send an email (V2)" step fails with
+ * "Bad Request - To Field cannot be null or empty". Falling back to active
+ * super_admin emails whenever no BU-specific admin exists keeps someone in
+ * the loop for every business unit, matching what a super_admin — who by
+ * definition oversees every BU — would reasonably want to see anyway.
+ */
 async function getBuAdminEmails(businessUnit) {
   const { rows } = await db.query(
     `SELECT DISTINCT u.email
@@ -46,7 +61,16 @@ async function getBuAdminEmails(businessUnit) {
       ORDER BY u.email`,
     [businessUnit]
   );
-  return rows.map((r) => r.email);
+  if (rows.length > 0) return rows.map((r) => r.email);
+
+  const fallback = await db.query(
+    `SELECT DISTINCT u.email
+       FROM admin_grants g
+       JOIN admin_users u ON u.id = g.admin_user_id
+      WHERE g.role = 'super_admin' AND u.is_active = true
+      ORDER BY u.email`
+  );
+  return fallback.rows.map((r) => r.email);
 }
 
 module.exports = { getManagerEmail, getBuAdminEmails };
