@@ -16,8 +16,8 @@ const MANAGER_EMAIL_COLUMN = {
 };
 
 /**
- * The single business-unit manager notification address, from
- * `manager_settings` (spec §1.5/§2.6 "manager notification settings").
+ * The business-unit manager notification address(es), from `manager_settings`
+ * (spec §1.5/§2.6 "manager notification settings").
  *
  * NOTE: the original Supabase backend stored this in a generic
  * `system_settings(key, value)` key-value table (keys `manager_email_ec`,
@@ -26,14 +26,29 @@ const MANAGER_EMAIL_COLUMN = {
  * up to GET/PUT /api/admin/settings in routes/admin.js). Functionally
  * equivalent for every call site below — swap this query if the two are
  * ever reconciled onto the original generic-table shape.
+ *
+ * FALLBACK (added 2026-09-17): nobody had ever filled in Manager Notification
+ * Settings for at least one business unit, so `manager_settings` had no
+ * usable address — `notify_email` came back `''` and Power Automate's
+ * "Send an email (V2)" step failed with "Bad Request - To Field cannot be
+ * null or empty" for both the "Business Unit Transfer Notification" and
+ * "Onboarding Completion Notification" flows (same class of bug as
+ * `getBuAdminEmails` below). When the dedicated manager address isn't
+ * configured, fall back to that business unit's bu_admin(s), then to
+ * super_admin(s), so these notifications reach *someone* instead of
+ * silently going nowhere (or erroring) until an admin fills in Settings.
  */
 async function getManagerEmail(businessUnit) {
   const column = MANAGER_EMAIL_COLUMN[businessUnit];
-  if (!column) return '';
-  const { rows } = await db.query(
-    `SELECT ${column} AS email FROM manager_settings ORDER BY created_at DESC LIMIT 1`
-  );
-  return (rows[0] && rows[0].email) || '';
+  if (column) {
+    const { rows } = await db.query(
+      `SELECT ${column} AS email FROM manager_settings ORDER BY created_at DESC LIMIT 1`
+    );
+    const configured = rows[0] && rows[0].email;
+    if (configured) return configured;
+  }
+  const fallbackEmails = await getBuAdminEmails(businessUnit);
+  return fallbackEmails.join(';');
 }
 
 /**
