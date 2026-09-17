@@ -31,11 +31,11 @@ const VALID_BUSINESS_UNITS = ['E&C', 'Land', 'Mall'];
 // system/admin-managed), and the jts_/pdpa_ consent columns (written only by
 // the dedicated /consent/jts and /consent/pdpa endpoints below, never via
 // the generic patch, so consent timestamps can't be spoofed via a stray
-// patch key). `position_applying` does not appear here — the product
-// owner confirmed (2026-09-11) that field was removed from the
-// application long ago; it no longer exists in the schema (see
-// db/migrations/002_position_applying_and_refno.sql).
+// patch key). `position_applying` was removed 2026-09-11 and reinstated
+// 2026-09-17 (db/migrations/004_re_add_position_applying.sql) — it's back
+// in the list below since candidates now fill it in on the form's first page.
 const APPLICATION_PATCH_COLUMNS = [
+  'position_applying',
   'name_nric', 'alias', 'permanent_address', 'permanent_postcode',
   'correspondence_address', 'correspondence_postcode', 'tel_residence',
   'tel_office', 'mobile_phone', 'email', 'place_of_birth', 'nric_new',
