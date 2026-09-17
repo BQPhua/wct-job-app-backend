@@ -23,13 +23,13 @@
 //
 // One deliberate content change from the original: the 'document' mode
 // prompt used to interpolate `data?.position_applying` ("for the position of
-// ..."). That field was removed application-wide (product owner, 2026-09-11
-// — see db/migrations/002_position_applying_and_refno.sql), so this
-// implementation drops that clause entirely rather than referencing a column
-// that no longer exists — see the 'document' branch below.
+// ..."). That field was removed application-wide 2026-09-11 (see
+// db/migrations/002_position_applying_and_refno.sql), so at that point this
+// implementation dropped the clause entirely rather than referencing a
+// column that no longer existed.
 //
-// Follow-up (2026-09-15): since there's no position/role field left on an
-// application at all, 'recommend' and 'document' now instead accept an
+// Follow-up (2026-09-15): with no position/role field left on an
+// application at all, 'recommend' and 'document' instead accepted an
 // optional, freely-typed `data.role_description` — the admin describes the
 // role/requirements per lookup in the AI Candidate Review UI (admin.html),
 // and the prompt weighs its answer against that specific text when present.
@@ -37,6 +37,16 @@
 // Q&A scoped to one candidate (e.g. "Is this person the best fit for this
 // role?"), reusing the exact same non-PII candidate payload and the same
 // role_description convention.
+//
+// Follow-up (2026-09-17): `position_applying` is BACK (product owner
+// reversed the 2026-09-11 decision — see
+// db/migrations/004_re_add_position_applying.sql). It's now included
+// automatically in every candidate-scoped payload admin.html sends
+// (`recommend`, `candidate_qa`, `document`) as `data.position_applying` —
+// the position the candidate said they're applying for. This is distinct
+// from `data.role_description`, which stays as the admin's own free-typed
+// hiring requirements for that lookup; both can be present at once, and the
+// prompts below reference each one for what it actually is.
 //
 // GEMINI_API_KEY: Supabase only ever shows a SHA-256 digest of an Edge
 // Function secret, never the plaintext value, once set — confirmed via the
@@ -102,11 +112,14 @@ router.post('/', asyncHandler(async (req, res) => {
       'application details (identified only by reference number — you are not given their ' +
       'name or contact details), recommend ONE status from exactly these options: ' +
       '"Shortlist", "KIV" (keep in view), or "Reject". ' +
-      "If the candidate data below includes a `role_description` field, weigh the " +
-      'recommendation specifically against those stated requirements — call out where the ' +
-      "candidate does or doesn't meet them. If `role_description` is absent or empty, judge " +
-      'general employability based on qualifications, experience, and stated expectations ' +
-      'instead, and don\'t assume any particular role. ' +
+      "If the candidate data below includes a `position_applying` field, that's the position " +
+      "this candidate applied for — keep it in mind as context for what role they're being " +
+      "considered for. If it also includes a `role_description` field, weigh the recommendation " +
+      'specifically against those stated requirements — call out where the candidate does or ' +
+      "doesn't meet them. If `role_description` is absent or empty, judge general employability " +
+      'based on qualifications, experience, and stated expectations instead (using ' +
+      '`position_applying`, if present, only as general context, not as a requirements spec), ' +
+      "and don't assume requirements that weren't actually given. " +
       'Start your response with "Recommendation: <status>" on its own line, then a short ' +
       '(3-5 sentence) justification referencing specific details from the data. Do not invent ' +
       'qualifications, experience, or details not present in the data. This is a recommendation ' +
@@ -122,11 +135,13 @@ router.post('/', asyncHandler(async (req, res) => {
       "You are an HR screening assistant for WCT Group. Answer the admin's question about ONE " +
       'specific candidate, using ONLY the application details below (identified only by ' +
       'reference number — you are not given their name or contact details). ' +
-      "If a `role_description` field is included, treat it as the role the admin is hiring for " +
-      'and weigh your answer against it explicitly — e.g. if asked whether this candidate is ' +
+      "A `position_applying` field, if included, is the position this candidate applied for. " +
+      "If a `role_description` field is also included, treat it as the role the admin is hiring " +
+      'for and weigh your answer against it explicitly — e.g. if asked whether this candidate is ' +
       'the best fit for the role, judge fit against those stated requirements specifically, not ' +
       "in the abstract. If `role_description` is absent, answer based on general employability " +
-      'instead and say plainly that no specific role/requirements were given. Do not invent ' +
+      "instead (treating `position_applying`, if present, as context only) and say plainly that " +
+      'no specific role/requirements were given. Do not invent ' +
       'qualifications, experience, or details not present in the data. This is input for a ' +
       'human reviewer, not a final decision.\n\n' +
       'Candidate data:\n' + JSON.stringify(data) + '\n\n' +
@@ -135,12 +150,14 @@ router.post('/', asyncHandler(async (req, res) => {
     requestParts = [{ text: prompt }];
   } else if (mode === 'document') {
     if (!fileBase64 || !mimeType) return res.status(400).json({ error: 'Missing file data' });
+    const positionApplying = data && data.position_applying ? String(data.position_applying).trim() : '';
     const roleDescription = data && data.role_description ? String(data.role_description).trim() : '';
     prompt =
       'You are an HR assistant for WCT Group. Analyze this candidate document (e.g. resume/CV ' +
       'or supporting attachment). Summarize key qualifications, relevant experience, and ' +
       'skills. Note anything that seems inconsistent or worth a human double-checking. Do not ' +
       'fabricate information not actually present in the document.' +
+      (positionApplying ? ` This candidate applied for the position of "${positionApplying}".` : '') +
       (roleDescription
         ? ' The admin is hiring for the following role — also note how well this document ' +
           `aligns with it, and flag any obvious gaps: "${roleDescription}"`
