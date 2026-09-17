@@ -132,15 +132,16 @@ CREATE TABLE applications (
 
   business_unit text NOT NULL CHECK (business_unit IN ('E&C', 'Land', 'Mall')),
 
-  -- NOTE: `position_applying` was deliberately REMOVED (product owner,
-  -- 2026-09-11: "position applying has been removed long ago, anything
-  -- related to position applying or position should be removed"). It used
-  -- to live here as a nullable admin-settable text column; see
-  -- db/migrations/002_position_applying_and_refno.sql for the DROP COLUMN
-  -- migration applied against the live database. Do not reintroduce it —
-  -- `working_experience[].position` (candidate's own work-history entries)
-  -- and `exit_interviews.position` (job title at time of exit) are separate,
-  -- unrelated fields that were NOT part of this removal.
+  -- Which position/role the candidate is applying for. Free text (not an
+  -- enum/FK) since open positions change far more often than this schema
+  -- should. NOTE: this was removed on 2026-09-11 (migration 002) and
+  -- reinstated on 2026-09-17 (migration 004) once the product owner asked
+  -- for it back — candidate-set on the application form's first page,
+  -- surfaced in the preview page, the exported PDF, and the admin
+  -- dashboard/AI Insights. Distinct from `working_experience[].position`
+  -- (candidate's own past-job titles) and `exit_interviews.position` (job
+  -- title at time of exit) — those are unrelated fields.
+  position_applying text,
 
   company_id  uuid REFERENCES companies (id),
   submitted_at timestamptz,
