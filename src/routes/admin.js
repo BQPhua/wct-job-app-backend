@@ -465,10 +465,11 @@ router.patch('/applications/:id', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: `business_unit must be one of ${VALID_BUSINESS_UNITS.join(', ')}` });
   }
 
-  // `position_applying` deliberately does not appear here — the product
-  // owner confirmed (2026-09-11) that field was removed from the
-  // application long ago (see db/migrations/002_position_applying_and_refno.sql).
-  const allowedColumns = ['name_nric', 'email', 'mobile_phone', 'business_unit'];
+  // `position_applying` is candidate-set on the application form and shown
+  // read-only to admins (spec-equivalent correction fields below stay
+  // limited to contact/BU details); it was reinstated 2026-09-17 (see
+  // db/migrations/004_re_add_position_applying.sql).
+  const allowedColumns = ['name_nric', 'email', 'mobile_phone', 'business_unit', 'position_applying'];
   const update = buildPatchUpdate('applications', 'id', req.params.id, patch, allowedColumns);
   if (!update) return res.json(app);
 
