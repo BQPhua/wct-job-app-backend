@@ -3,7 +3,7 @@
 // ============================================================================
 // Small DB lookups shared by the Power Automate notification call sites
 // (routes/applications.js, routes/admin.js, routes/onboarding.js,
-// routes/exitInterview.js). Split out here so each route file doesn't
+// routes/adminOffboarding.js). Split out here so each route file doesn't
 // reimplement the same two queries.
 // ============================================================================
 

@@ -59,9 +59,12 @@
 const express = require('express');
 const asyncHandler = require('../lib/asyncHandler');
 const { requireAdminAuth } = require('../middleware/auth');
+const { requireHrAdmin } = require('../lib/offboarding/access');
 
 const router = express.Router();
 router.use(requireAdminAuth);
+// HR-only, enforced here too so it never depends on route mount order.
+router.use(requireHrAdmin);
 
 const SUPPORTED_MODES = ['summary', 'chat', 'recommend', 'candidate_qa', 'document'];
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';

@@ -36,6 +36,7 @@
 // ============================================================================
 
 const jwt = require('jsonwebtoken');
+const { rolesFromClaims } = require('../lib/offboarding/access');
 
 function requireCandidateAuth(req, res, next) {
   const token = extractBearerToken(req);
@@ -60,8 +61,11 @@ function requireAdminAuth(req, res, next) {
     const payload = jwt.verify(token, process.env.ADMIN_JWT_SECRET);
     req.admin = {
       adminUserId: payload.admin_user_id,
-      unitScope: payload.unit_scope, // 'ALL' or one of 'E&C' | 'Land' | 'Mall'
+      unitScope: payload.unit_scope, // 'ALL' | 'E&C' | 'Land' | 'Mall' | 'SUPERIOR'
       email: payload.email,
+      // { bu_admin, payroll_pic, clearance_department_ids } for this scope —
+      // see src/lib/offboarding/access.js for how grants become roles.
+      roles: rolesFromClaims(payload),
     };
     return next();
   } catch (err) {

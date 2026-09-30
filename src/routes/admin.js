@@ -20,29 +20,24 @@ const { requireAdminAuth } = require('../middleware/auth');
 const { buildPatchUpdate } = require('../lib/patchMerge');
 const { notify, sanitizeNotificationPayload } = require('../lib/powerAutomate');
 const { getManagerEmail } = require('../lib/notificationHelpers');
-const { verifyMicrosoftIdToken } = require('../lib/oauthVerify');
+// Called through the module object (not destructured) so tests can stub
+// Microsoft token verification.
+const oauthVerify = require('../lib/oauthVerify');
+const { resolveAdminGrants, requireHrAdmin, formatRoleLabel } = require('../lib/offboarding/access');
 
 const router = express.Router();
 
 const VALID_BUSINESS_UNITS = ['E&C', 'Land', 'Mall'];
 
-// Human-readable label for a role, for use in notification email bodies
-// (e.g. Power Automate's "grant added" / "grant revoked" / "reactivated"
-// templates) — the raw `role`/`business_unit` DB values are also sent
-// alongside this in every payload below, in case the template would rather
-// compose its own wording.
-function formatRoleLabel(role, businessUnit) {
-  if (role === 'super_admin') return 'Super Admin';
-  if (role === 'bu_admin') return `BU Admin (${businessUnit || 'unassigned'})`;
-  return role || '';
-}
-// Statuses selectable via the generic status-setter (spec §6.4) — NOT
-// including 'offboarding', which has its own dedicated endpoint with side
-// effects (creating the exit_interviews row + notification).
+// Human-readable role labels (formatRoleLabel) live in lib/offboarding/access.js
+// so the new Payroll/Clearance PIC roles are labelled consistently everywhere.
+// Statuses selectable via the status-setter (spec §6.4). 'offboarding' is no
+// longer an application status (2026-09-30): offboarding is its own
+// invite-driven module — see routes/adminOffboarding.js.
 const GENERIC_STATUS_OPTIONS = ['shortlisted', 'kiv', 'hired', 'rejected', 'blacklisted'];
 const ALL_KNOWN_STATUSES = [
   'draft', 'submitted', 'under_review', 'shortlisted', 'interview_scheduled',
-  'offer_sent', 'withdrawn', 'kiv', 'hired', 'offboarding', 'rejected', 'blacklisted',
+  'offer_sent', 'withdrawn', 'kiv', 'hired', 'rejected', 'blacklisted',
 ];
 
 // Base URL of the deployed candidate/admin frontend, used to build the deep
@@ -113,40 +108,36 @@ router.post('/auth/microsoft', asyncHandler(async (req, res) => {
 
   let identity;
   try {
-    identity = await verifyMicrosoftIdToken(idToken, process.env.ADMIN_MS_CLIENT_ID);
+    identity = await oauthVerify.verifyMicrosoftIdToken(idToken, process.env.ADMIN_MS_CLIENT_ID);
   } catch (err) {
     return res.status(401).json({ error: `Invalid Microsoft sign-in: ${err.message}` });
   }
 
-  const { rows } = await db.query(
-    'SELECT id, email, is_active FROM admin_users WHERE email = $1',
-    [identity.email]
-  );
-  if (rows.length === 0 || !rows[0].is_active) {
-    return res.json({ authorized: false, is_super_admin: false, bu_grants: [] });
+  const access = await resolveAdminGrants(identity.email);
+  if (access.adminUser) {
+    // First-sign-in linking (spec §2.6: auth_user_id stays NULL until first
+    // successful sign-in) — now the real Entra `oid` claim, verified above.
+    await db.query(
+      'UPDATE admin_users SET auth_user_id = COALESCE(auth_user_id, $1) WHERE id = $2',
+      [identity.subject, access.adminUser.id]
+    );
   }
 
-  const adminUser = rows[0];
-  // First-sign-in linking (spec §2.6: auth_user_id stays NULL until first
-  // successful sign-in) — now the real Entra `oid` claim, verified above.
-  await db.query(
-    `UPDATE admin_users SET auth_user_id = COALESCE(auth_user_id, $1) WHERE id = $2`,
-    [identity.subject, adminUser.id]
-  );
-
-  const grants = await db.query(
-    'SELECT role, business_unit FROM admin_grants WHERE admin_user_id = $1',
-    [adminUser.id]
-  );
-  const isSuper = grants.rows.some((g) => g.role === 'super_admin');
-  const buGrants = grants.rows.filter((g) => g.role === 'bu_admin').map((g) => g.business_unit);
-
+  // `bu_grants` = every BU in which this person holds ANY staff role
+  // (bu_admin, payroll_pic or clearance_pic) — the frontend shows the BU
+  // picker when there is more than one. `superior` = no grants at all, but
+  // they are the named immediate superior on an open offboarding case, so
+  // they may sign in just to clear that Reporting Unit section.
+  const hasGrants = access.isSuper || access.buChoices.length > 0;
+  const superior = !hasGrants && access.superiorSections > 0;
   return res.json({
-    authorized: grants.rows.length > 0,
-    is_super_admin: isSuper,
-    bu_grants: buGrants,
-    admin_user_id: adminUser.id,
-    email: adminUser.email,
+    authorized: hasGrants || superior,
+    is_super_admin: access.isSuper,
+    bu_grants: access.buChoices,
+    bu_roles: access.byBu,
+    superior,
+    admin_user_id: access.adminUser ? access.adminUser.id : null,
+    email: identity.email,
   });
 }));
 
@@ -161,43 +152,39 @@ router.post('/auth/session', asyncHandler(async (req, res) => {
 
   let identity;
   try {
-    identity = await verifyMicrosoftIdToken(idToken, process.env.ADMIN_MS_CLIENT_ID);
+    identity = await oauthVerify.verifyMicrosoftIdToken(idToken, process.env.ADMIN_MS_CLIENT_ID);
   } catch (err) {
     return res.status(401).json({ error: `Invalid Microsoft sign-in: ${err.message}` });
   }
 
-  const adminRows = await db.query(
-    'SELECT id, email, is_active FROM admin_users WHERE email = $1',
-    [identity.email]
-  );
-  if (adminRows.rows.length === 0 || !adminRows.rows[0].is_active) {
-    return res.status(403).json({ error: 'Admin account not found or inactive' });
-  }
-  const adminUserId = adminRows.rows[0].id;
-
-  const grants = await db.query(
-    'SELECT role, business_unit FROM admin_grants WHERE admin_user_id = $1',
-    [adminUserId]
-  );
-  const isSuper = grants.rows.some((g) => g.role === 'super_admin');
-
+  const access = await resolveAdminGrants(identity.email);
   let unitScope;
-  if (isSuper) {
+  let roles;
+  let adminUserId = access.adminUser ? access.adminUser.id : null;
+
+  if (access.isSuper) {
     // null business_unit is only valid for super admins ("ALL") — spec §1.5.
     unitScope = 'ALL';
+    roles = { bu_admin: true, payroll_pic: true, clearance_department_ids: [1, 2, 3, 4, 5, 6] };
+  } else if (access.buChoices.length > 0) {
+    const chosen = businessUnit || (access.buChoices.length === 1 ? access.buChoices[0] : null);
+    if (!chosen || !access.buChoices.includes(chosen)) {
+      return res.status(400).json({ error: `business_unit must be one of your granted units: ${access.buChoices.join(', ')}` });
+    }
+    unitScope = chosen;
+    roles = access.byBu[chosen];
+  } else if (access.superiorSections > 0) {
+    // Immediate superior with no grant: may only clear the Reporting Unit
+    // sections assigned to their email (enforced in lib/offboarding/access).
+    unitScope = 'SUPERIOR';
+    roles = { bu_admin: false, payroll_pic: false, clearance_department_ids: [] };
+    adminUserId = null;
   } else {
-    const buGrants = grants.rows.filter((g) => g.role === 'bu_admin').map((g) => g.business_unit);
-    if (buGrants.length === 0) {
-      return res.status(403).json({ error: 'This account has no admin grants' });
-    }
-    if (!businessUnit || !buGrants.includes(businessUnit)) {
-      return res.status(400).json({ error: `business_unit must be one of your granted units: ${buGrants.join(', ')}` });
-    }
-    unitScope = businessUnit;
+    return res.status(403).json({ error: 'This account has no admin access' });
   }
 
   const token = jwt.sign(
-    { admin_user_id: adminUserId, unit_scope: unitScope, email: adminRows.rows[0].email },
+    { admin_user_id: adminUserId, unit_scope: unitScope, email: identity.email, roles },
     process.env.ADMIN_JWT_SECRET,
     { expiresIn: process.env.ADMIN_JWT_EXPIRES_IN || '12h' }
   );
@@ -258,7 +245,12 @@ router.get('/me', asyncHandler(async (req, res) => {
   if (!req.admin.adminUserId) {
     // Break-glass passcode session (see /auth/login above) — not tied to
     // any admin_users row, so there's no real name/email to return.
-    return res.json({ email: null, display_name: 'Break-glass admin', unit_scope: req.admin.unitScope });
+    return res.json({
+      email: req.admin.email || null,
+      display_name: req.admin.unitScope === 'SUPERIOR' ? (req.admin.email || 'Superior') : 'Break-glass admin',
+      unit_scope: req.admin.unitScope,
+      roles: req.admin.roles,
+    });
   }
   const { rows } = await db.query('SELECT email, display_name FROM admin_users WHERE id = $1', [req.admin.adminUserId]);
   if (rows.length === 0) return res.status(404).json({ error: 'Admin not found' });
@@ -266,8 +258,14 @@ router.get('/me', asyncHandler(async (req, res) => {
     email: rows[0].email,
     display_name: rows[0].display_name || rows[0].email,
     unit_scope: req.admin.unitScope,
+    roles: req.admin.roles,
   });
 }));
+
+// Everything below this line is the job-application side of the dashboard:
+// HR admins only. Payroll PIC, Clearance PIC and superior sessions reach
+// only /me above and the offboarding router (routes/adminOffboarding.js).
+router.use(requireHrAdmin);
 
 // ============================================================================
 // Dashboard / search / stats (spec §1.5 "Dashboard / search / stats")
@@ -340,25 +338,6 @@ router.get('/stats', asyncHandler(async (req, res) => {
   for (const row of byStatusResult.rows) byStatus[row.status] = row.count;
 
   return res.json({ total: totalResult.rows[0].total, by_status: byStatus });
-}));
-
-// GET /api/admin/exit-interviews/pending-count  (rpc_admin_count_pending_exit_signatures)
-router.get('/exit-interviews/pending-count', asyncHandler(async (req, res) => {
-  const bu = effectiveBusinessUnitFilter(req.admin, null);
-  const conditions = ['ei.employee_signed = true', 'ei.hr_signed = false'];
-  const values = [];
-  if (bu) {
-    conditions.push(`a.business_unit = $1`);
-    values.push(bu);
-  }
-  const { rows } = await db.query(
-    `SELECT count(*)::int AS count
-       FROM exit_interviews ei
-       JOIN applications a ON a.id = ei.application_id
-      WHERE ${conditions.join(' AND ')}`,
-    values
-  );
-  return res.json({ count: rows[0].count });
 }));
 
 // GET /api/admin/export  (rpc_admin_export_all — applications LEFT JOIN onboarding_records)
@@ -525,14 +504,6 @@ router.get('/applications/:id/other-bu', asyncHandler(async (req, res) => {
   return res.json(rows);
 }));
 
-// GET /api/admin/applications/:id/exit-interview  (rpc_admin_get_exit_interview)
-router.get('/applications/:id/exit-interview', asyncHandler(async (req, res) => {
-  const app = await fetchScopedApplication(req, res);
-  if (!app) return;
-  const { rows } = await db.query('SELECT * FROM exit_interviews WHERE application_id = $1', [app.id]);
-  return res.json(rows[0] || null);
-}));
-
 // GET /api/admin/applications/:id/onboarding  (rpc_admin_get_onboarding)
 // Admin read-only view of a candidate's onboarding record — the candidate-
 // facing GET /api/onboarding/:application_id (onboarding.js) is scoped to
@@ -556,7 +527,7 @@ router.post('/applications/:id/status', asyncHandler(async (req, res) => {
 
   const { status } = req.body || {};
   if (!GENERIC_STATUS_OPTIONS.includes(status)) {
-    return res.status(400).json({ error: `status must be one of ${GENERIC_STATUS_OPTIONS.join(', ')} (use the dedicated offboarding endpoint for that transition)` });
+    return res.status(400).json({ error: `status must be one of ${GENERIC_STATUS_OPTIONS.join(', ')}` });
   }
 
   const result = await db.withTransaction(async (client) => {
@@ -588,95 +559,6 @@ router.post('/applications/:id/status', asyncHandler(async (req, res) => {
   }
 
   return res.json(result);
-}));
-
-// POST /api/admin/applications/:id/offboarding  (rpc_admin_set_offboarding)
-router.post('/applications/:id/offboarding', asyncHandler(async (req, res) => {
-  const app = await fetchScopedApplication(req, res);
-  if (!app) return;
-
-  const result = await db.withTransaction(async (client) => {
-    const { rows } = await client.query(
-      `UPDATE applications SET status = 'offboarding' WHERE id = $1 RETURNING *`,
-      [req.params.id]
-    );
-    const updated = rows[0];
-
-    await client.query(
-      `INSERT INTO exit_interviews (application_id)
-       VALUES ($1)
-       ON CONFLICT (application_id) DO NOTHING`,
-      [req.params.id]
-    );
-
-    return updated;
-  });
-
-  // Power Automate notification (mirrors the original
-  // `rpc_admin_set_offboarding`'s own notify call — shares one workflow with
-  // the employee-signed/hr-signed exit-interview events below, distinguished
-  // by `event_type`).
-  notify('exit_interview', {
-    event_type: 'fill_exit_interview',
-    application_id: result.id,
-    reference_no: result.reference_no || '',
-    candidate_name: result.name_nric || '',
-    candidate_email: result.email || '',
-    business_unit: result.business_unit || '',
-    exit_interview_link: `${FRONTEND_BASE_URL}/index.html?exit=${result.id}`,
-  });
-
-  return res.json(result);
-}));
-
-// POST /api/admin/exit-interviews/:application_id/sign  (rpc_admin_sign_exit_interview)
-router.post('/exit-interviews/:application_id/sign', asyncHandler(async (req, res) => {
-  const appRows = await db.query('SELECT * FROM applications WHERE id = $1', [req.params.application_id]);
-  if (appRows.rows.length === 0) return res.status(404).json({ error: 'Application not found' });
-  const app = appRows.rows[0];
-  if (!isSuperAdmin(req.admin) && app.business_unit !== req.admin.unitScope) {
-    return res.status(403).json({ error: "This application is outside your business unit's scope" });
-  }
-
-  const { hr_name: hrName, hr_position: hrPosition } = req.body || {};
-  if (!hrName || !hrPosition) {
-    return res.status(400).json({ error: 'hr_name and hr_position are required' });
-  }
-
-  const eiRows = await db.query('SELECT * FROM exit_interviews WHERE application_id = $1', [req.params.application_id]);
-  if (eiRows.rows.length === 0) {
-    return res.status(404).json({ error: 'No exit interview record for this application' });
-  }
-  if (!eiRows.rows[0].employee_signed) {
-    return res.status(409).json({ error: "Section D can't be completed before the employee's Section A-C signature" });
-  }
-
-  const { rows } = await db.query(
-    `UPDATE exit_interviews
-       SET hr_signed = true, hr_signed_name = $1, hr_signed_position = $2, hr_signed_at = now()
-     WHERE application_id = $3
-     RETURNING *`,
-    [hrName, hrPosition, req.params.application_id]
-  );
-  const ei = rows[0];
-
-  // Power Automate notification (mirrors the original
-  // `notify_power_automate_on_exit_interview_signed` trigger's 'hr_signed' branch).
-  notify('exit_interview', {
-    event_type: 'hr_signed',
-    application_id: req.params.application_id,
-    reference_no: app.reference_no || '',
-    candidate_name: app.name_nric || '',
-    candidate_email: app.email || '',
-    position: ei.position || '',
-    business_unit: app.business_unit || '',
-    hr_signed_name: ei.hr_signed_name || '',
-    hr_signed_position: ei.hr_signed_position || '',
-    hr_signed_at: ei.hr_signed_at ? String(ei.hr_signed_at) : '',
-    exit_interview_link: `${FRONTEND_BASE_URL}/index.html?exit=${req.params.application_id}`,
-  });
-
-  return res.json(ei);
 }));
 
 // ============================================================================
@@ -945,9 +827,10 @@ router.get('/admins', requireSuperAdmin, asyncHandler(async (req, res) => {
   const { rows } = await db.query(`
     SELECT au.id AS admin_user_id, au.email, au.display_name, au.is_active,
            (au.auth_user_id IS NOT NULL) AS linked,
-           g.id AS grant_id, g.role, g.business_unit
+           g.id AS grant_id, g.role, g.business_unit, g.department_id, d.name AS department_name
       FROM admin_users au
       LEFT JOIN admin_grants g ON g.admin_user_id = au.id
+      LEFT JOIN clearance_departments d ON d.id = g.department_id
      ORDER BY au.email, g.role
   `);
   return res.json(rows);
@@ -999,25 +882,37 @@ router.post('/admins/:admin_user_id/grants', requireSuperAdmin, asyncHandler(asy
     // than silently creating an unenforced grant.
     return res.status(501).json({ error: "The 'entity_admin' role is defined as Phase 2 and is not implemented" });
   }
-  if (!['super_admin', 'bu_admin'].includes(role)) {
-    return res.status(400).json({ error: "role must be 'super_admin' or 'bu_admin'" });
+  const GRANTABLE = ['super_admin', 'bu_admin', 'payroll_pic', 'clearance_pic'];
+  if (!GRANTABLE.includes(role)) {
+    return res.status(400).json({ error: `role must be one of: ${GRANTABLE.join(', ')}` });
   }
-  if (role === 'bu_admin' && !VALID_BUSINESS_UNITS.includes(businessUnit)) {
-    return res.status(400).json({ error: 'business_unit is required for a bu_admin grant' });
+  const needsBu = role !== 'super_admin';
+  if (needsBu && !VALID_BUSINESS_UNITS.includes(businessUnit)) {
+    return res.status(400).json({ error: `business_unit is required for a ${role} grant` });
   }
   if (role === 'super_admin' && businessUnit) {
     return res.status(400).json({ error: 'business_unit must not be set for a super_admin grant' });
+  }
+  const departmentId = role === 'clearance_pic' ? Number(req.body.department_id) : null;
+  if (role === 'clearance_pic' && !(departmentId >= 1 && departmentId <= 6)) {
+    return res.status(400).json({ error: 'department_id (1-6) is required for a clearance_pic grant' });
   }
 
   const adminRows = await db.query('SELECT id, email, display_name FROM admin_users WHERE id = $1', [req.params.admin_user_id]);
   if (adminRows.rows.length === 0) return res.status(404).json({ error: 'Admin user not found' });
   const targetAdmin = adminRows.rows[0];
 
-  const { rows } = await db.query(
-    'INSERT INTO admin_grants (admin_user_id, role, business_unit) VALUES ($1, $2, $3) RETURNING *',
-    [req.params.admin_user_id, role, role === 'bu_admin' ? businessUnit : null]
-  );
-  const grant = rows[0];
+  let grant;
+  try {
+    const { rows } = await db.query(
+      'INSERT INTO admin_grants (admin_user_id, role, business_unit, department_id) VALUES ($1, $2, $3, $4) RETURNING *',
+      [req.params.admin_user_id, role, needsBu ? businessUnit : null, departmentId]
+    );
+    grant = rows[0];
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'This person already has that role' });
+    throw err;
+  }
 
   // Power Automate notification — see the `admin_permission_change` comment
   // in lib/powerAutomate.js: this shares one flow/webhook with grant-revoke
@@ -1030,7 +925,7 @@ router.post('/admins/:admin_user_id/grants', requireSuperAdmin, asyncHandler(asy
     target_name: targetAdmin.display_name || targetAdmin.email,
     role: grant.role,
     business_unit: grant.business_unit || '',
-    role_label: formatRoleLabel(grant.role, grant.business_unit),
+    role_label: formatRoleLabel(grant.role, grant.business_unit, grant.department_id),
     changed_by_name: (granter && granter.display_name) || 'A Super Admin',
     admin_login_link: `${FRONTEND_BASE_URL}/admin.html`,
   });
@@ -1043,7 +938,7 @@ router.delete('/grants/:grant_id', requireSuperAdmin, asyncHandler(async (req, r
   // Fetch the grant + its owning admin BEFORE deleting — the DELETE alone
   // would leave nothing to build the notification payload from.
   const grantRows = await db.query(
-    `SELECT g.role, g.business_unit, au.email, au.display_name
+    `SELECT g.role, g.business_unit, g.department_id, au.email, au.display_name
        FROM admin_grants g
        JOIN admin_users au ON au.id = g.admin_user_id
       WHERE g.id = $1`,
@@ -1063,7 +958,7 @@ router.delete('/grants/:grant_id', requireSuperAdmin, asyncHandler(async (req, r
     target_name: grant.display_name || grant.email,
     role: grant.role,
     business_unit: grant.business_unit || '',
-    role_label: formatRoleLabel(grant.role, grant.business_unit),
+    role_label: formatRoleLabel(grant.role, grant.business_unit, grant.department_id),
     changed_by_name: (revoker && revoker.display_name) || 'A Super Admin',
     admin_login_link: `${FRONTEND_BASE_URL}/admin.html`,
   });
@@ -1098,10 +993,10 @@ router.patch('/admins/:admin_user_id/active', requireSuperAdmin, asyncHandler(as
   // grants and joins their labels together (e.g. "Super Admin" or
   // "BU Admin (E&C), BU Admin (Mall)"), rather than sending one role.
   const grantRows = await db.query(
-    'SELECT role, business_unit FROM admin_grants WHERE admin_user_id = $1 ORDER BY role, business_unit',
+    'SELECT role, business_unit, department_id FROM admin_grants WHERE admin_user_id = $1 ORDER BY role, business_unit',
     [req.params.admin_user_id]
   );
-  const roleLabel = grantRows.rows.map((g) => formatRoleLabel(g.role, g.business_unit)).join(', ');
+  const roleLabel = grantRows.rows.map((g) => formatRoleLabel(g.role, g.business_unit, g.department_id)).join(', ');
 
   notify('admin_permission_change', {
     event_type: isActive ? 'reactivated' : 'deactivated',

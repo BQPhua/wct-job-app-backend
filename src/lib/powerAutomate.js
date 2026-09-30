@@ -12,7 +12,7 @@
 // moves up into this Node/Express layer instead — fired from the route
 // handler right after the DB write that used to carry the trigger.
 //
-// There are 7 distinct Power Automate "manual trigger" HTTP endpoints. Their
+// There are 6 distinct event-specific Power Automate "manual trigger" HTTP endpoints. Their
 // URLs (including the `sig=` query parameter, which functions as a bearer
 // credential for that flow) are secrets — never hold this file's source, all
 // 7 are read from environment variables (see .env.example) and are UNSET by
@@ -35,11 +35,8 @@ const EVENT_URL_ENV = {
   bu_transfer: 'POWER_AUTOMATE_URL_BU_TRANSFER',
   // onboarding all-sections-confirmed → notify_power_automate_on_onboarding_complete
   onboarding_complete: 'POWER_AUTOMATE_URL_ONBOARDING_COMPLETE',
-  // Shared by three call sites, each with a different `event_type` in the
-  // payload: rpc_admin_set_offboarding ('fill_exit_interview'),
-  // rpc_submit_my_exit_interview ('employee_signed'), and
-  // notify_power_automate_on_exit_interview_signed ('hr_signed').
-  exit_interview: 'POWER_AUTOMATE_URL_EXIT_INTERVIEW',
+  // (The old 'exit_interview' flow was retired on 2026-09-30 — offboarding
+  // emails now go through sendOffboardingEmail below.)
   // rpc_admin_invite_admin
   invite_admin: 'POWER_AUTOMATE_URL_INVITE_ADMIN',
   // Single Power Automate flow (one manual-trigger URL) fanning out on a
@@ -107,6 +104,52 @@ async function notify(eventKey, payload) {
 }
 
 // ----------------------------------------------------------------------------
+// Offboarding emails (2026-09-30). Unlike the event-specific flows above,
+// every offboarding email goes through ONE generic Power Automate flow
+// ("WCT Offboarding Email": HTTP trigger → Send an email (V2)) that takes
+// the finished email — to / cc / subject / html / attachments — so wording
+// changes are code changes and there is only one flow to keep alive. The
+// email content itself is built in src/lib/offboarding/mailer.js.
+//
+// Returns { ok, status } — ok only on a 2xx — so callers that must know
+// whether the email really left (the reminder job only logs a reminder as
+// sent after a 2xx) can check, while everyone else can ignore the result.
+// Never throws.
+// ----------------------------------------------------------------------------
+async function sendOffboardingEmail(payload) {
+  const url = process.env.POWER_AUTOMATE_URL_OFFBOARDING_EMAIL;
+  if (!url) {
+    if (!warnedMissing.has('offboarding_email')) {
+      warnedMissing.add('offboarding_email');
+      // eslint-disable-next-line no-console
+      console.warn('powerAutomate: POWER_AUTOMATE_URL_OFFBOARDING_EMAIL is not set — skipping offboarding emails (expected in local/dev)');
+    }
+    return { ok: false, status: 0, skipped: 'no_url' };
+  }
+  if (!payload || !payload.to) {
+    // eslint-disable-next-line no-console
+    console.warn(`powerAutomate: offboarding "${payload && payload.event_type}" email has no recipients — skipped`);
+    return { ok: false, status: 0, skipped: 'no_recipients' };
+  }
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      // eslint-disable-next-line no-console
+      console.error(`powerAutomate: offboarding "${payload.event_type}" email returned ${res.status}`);
+    }
+    return { ok: res.ok, status: res.status };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(`powerAutomate: offboarding "${payload.event_type}" email failed:`, err.message || err);
+    return { ok: false, status: 0 };
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Payload data-minimization, mirroring the original `sanitize_notification_
 // payload(p_row jsonb)` SQL function: given a full `applications` row, blank
 // out every jsonb array/object column (regardless of content) before it goes
@@ -136,4 +179,5 @@ function sanitizeNotificationPayload(row) {
   return out;
 }
 
-module.exports = { notify, sanitizeNotificationPayload };
+module.exports = {
+  sendOffboardingEmail, notify, sanitizeNotificationPayload };

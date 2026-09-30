@@ -6,6 +6,10 @@
 -- reverse-engineered spec this schema was derived from for section (§) refs
 -- cited throughout this file (schema.sql comments reference spec §-numbers).
 --
+-- FRESH INSTALLS: after this file, also apply every db/migrations/*.sql in
+-- filename order (002, 003, 004, 005 ...) — later features, including the
+-- offboarding module (005), live only in those migrations.
+--
 -- IMPORTANT — things intentionally NOT in this file, by design:
 --   * No Supabase-specific features: no `auth.uid()`, no Row Level Security
 --     policies, no `auth.users` table. Authentication and authorization are

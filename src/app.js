@@ -8,8 +8,10 @@ const { requireCandidateAuth } = require('./middleware/auth');
 const authRoutes = require('./routes/auth');
 const applicationsRoutes = require('./routes/applications');
 const onboardingRoutes = require('./routes/onboarding');
-const exitInterviewRoutes = require('./routes/exitInterview');
 const adminRoutes = require('./routes/admin');
+const adminOffboardingRoutes = require('./routes/adminOffboarding');
+const offboardingRoutes = require('./routes/offboarding');
+const offboardingCronRoutes = require('./routes/offboardingCron');
 const aiInsightsRoutes = require('./routes/aiInsights');
 const uploadsRoutes = require('./routes/uploads');
 
@@ -41,10 +43,17 @@ app.get('/api/blacklist-check', requireCandidateAuth, applicationsRoutes.blackli
 // ---- Candidate-facing routes ----
 app.use('/api/applications', applicationsRoutes);
 app.use('/api/onboarding', onboardingRoutes);
-app.use('/api/exit-interviews', exitInterviewRoutes);
 app.use('/api/uploads', uploadsRoutes);
+// Offboarding: the daily reminder endpoint (secret-key protected, called by
+// Power Automate) must be mounted before the candidate-auth router.
+app.use('/api/offboarding/cron', offboardingCronRoutes);
+app.use('/api/offboarding', offboardingRoutes);
 
 // ---- Admin routes ----
+// Offboarding is mounted BEFORE the general admin router: that router gates
+// everything after /me to HR admins, while offboarding is also used by
+// Payroll PICs, Clearance PICs and immediate superiors.
+app.use('/api/admin/offboarding', adminOffboardingRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/ai-insights', aiInsightsRoutes);
 
