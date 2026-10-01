@@ -32,11 +32,11 @@ const { addDays, todayMYT } = require('../../src/lib/offboarding/dates');
     const { rows } = await client.query(
       `INSERT INTO offboarding_cases (ref_no, invite_token, employee_email, employee_name, business_unit, status, invited_by_email,
          position, department, company_name, date_joined, notice_period_days, official_last_day, actual_last_day, submitted_at,
-         acknowledged_at, payroll_completed_at, immediate_superior_name)
+         acknowledged_at, payroll_completed_at, immediate_superior_name, immediate_superior_email)
        VALUES ($1,$2,$3,$4,$5,$6,'hr.land@wct.my','Executive','Finance','WCT Land Sdn Bhd','2020-01-06',30,$7,$7,
          CASE WHEN $6 <> 'invited' THEN now() END,
          CASE WHEN $6 IN ('pending_payroll','completed') THEN now() END,
-         CASE WHEN $6 = 'completed' THEN now() END, 'Mr Lee') RETURNING *`,
+         CASE WHEN $6 = 'completed' THEN now() END, 'Mr Lee', 'mr.lee@wct.my') RETURNING *`,
       [await lifecycle.nextRefNo(client), fx.randomToken(), `${name.toLowerCase().replace(/\s+/g, '.')}@wct.my`, name, bu, status, addDays(t, lastDayOffset)]
     );
     await client.query("INSERT INTO offboarding_exit_interviews (case_id, reasons, comments, employee_signature_name, employee_signed_at) VALUES ($1, '[\"Better Offer\",\"Career Advancement\"]', 'Great team.', $2, CASE WHEN $3 <> 'invited' THEN now() END)", [rows[0].id, name, status]);
