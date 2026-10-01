@@ -105,10 +105,10 @@ See the file list delivered with this change. The backend goes first, because th
 
 ### 4. Assign the new roles (admin dashboard → Admin Access)
 - [ ] **Payroll PIC**: one or more per business unit
-- [ ] **Clearance PIC**: per business unit **and** department (IT, Administration, Finance, Purchasing, Human Resources; Reporting Unit PICs are only needed as a fallback when HR leaves the superior email blank)
+- [ ] **Clearance PIC**: per business unit **and** department (IT, Administration, Finance, Purchasing, Human Resources). There is no Reporting Unit PIC: the employee's immediate superior *is* the Reporting Unit. HR must enter the superior's email when inviting, and that person gets the Reporting Unit checklist and signs in on admin.html with Microsoft, with no grant needed.
 - [ ] New people must first be invited with "+ Invite Admin" (an @wct.my email). They then sign in on admin.html with Microsoft.
 
-If a department has no PIC, its clearance emails go to that business unit's HR admins, so nothing gets lost.
+If a department has no PIC, its clearance emails go to that business unit's HR admins, so nothing gets lost. Cases migrated from the old system may have no superior email: their Reporting Unit email goes to HR, who can add the superior with **Edit details** or sign on behalf.
 
 ### 5. Smoke test in production
 - [ ] HR: Offboarding → **Invite employee** with your own test mailbox, then check the email arrives.
