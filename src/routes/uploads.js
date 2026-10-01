@@ -25,11 +25,14 @@
 // ============================================================================
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const multer = require('multer');
 const { BlobServiceClient, BlobSASPermissions } = require('@azure/storage-blob');
 const asyncHandler = require('../lib/asyncHandler');
 const { requireCandidateAuth } = require('../middleware/auth');
+const fileStore = require('../lib/fileStore');
 
 const router = express.Router();
 router.use(requireCandidateAuth);
@@ -94,14 +97,31 @@ async function uploadToContainer(req, res, containerName) {
     return res.status(400).json({ error: 'No file uploaded (expected multipart/form-data field "file")' });
   }
 
+  const blobName = `${req.user.id}/${crypto.randomUUID()}-${sanitizeFilename(req.file.originalname)}`;
+  const meta = {
+    name: req.file.originalname,
+    type: req.file.mimetype || 'application/octet-stream',
+    uploaded_at: new Date().toISOString(),
+  };
+
+  // Own server (UPLOAD_DIR set): save to disk and return a signed local link.
+  if (fileStore.enabled()) {
+    const folder = containerName === PROFILE_PICTURE_CONTAINER ? 'profile-pictures' : 'attachments';
+    const fileKey = `${folder}/${blobName}`;
+    const full = fileStore.resolve(fileKey);
+    if (!full) return res.status(400).json({ error: 'Invalid file name' });
+    await fs.promises.mkdir(path.dirname(full), { recursive: true });
+    await fs.promises.writeFile(full, req.file.buffer, { flag: 'wx' });
+    return res.status(201).json({ ...meta, url: fileStore.signedUrl(fileKey) });
+  }
+
   const containerClient = await getReadyContainerClient(containerName);
   if (!containerClient) {
     return res.status(503).json({
-      error: 'File upload is not configured: AZURE_STORAGE_CONNECTION_STRING is not set',
+      error: 'File upload is not configured: set UPLOAD_DIR (own server) or AZURE_STORAGE_CONNECTION_STRING',
     });
   }
 
-  const blobName = `${req.user.id}/${crypto.randomUUID()}-${sanitizeFilename(req.file.originalname)}`;
   const blockBlobClient = containerClient.getBlockBlobClient(blobName);
 
   await blockBlobClient.uploadData(req.file.buffer, {
@@ -113,12 +133,7 @@ async function uploadToContainer(req, res, containerName) {
     expiresOn: new Date(Date.now() + SAS_EXPIRY_MS),
   });
 
-  return res.status(201).json({
-    name: req.file.originalname,
-    url,
-    type: req.file.mimetype || 'application/octet-stream',
-    uploaded_at: new Date().toISOString(),
-  });
+  return res.status(201).json({ ...meta, url });
 }
 
 // POST /api/uploads/profile-picture  (multipart/form-data, field "file")

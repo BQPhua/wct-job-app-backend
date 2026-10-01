@@ -413,7 +413,19 @@ function validateDetails(input, { creating }) {
   }
   if (creating && !out.employee_name) fail(400, 'Employee name is required');
   if ('employee_name' in out && !out.employee_name) fail(400, 'Employee name is required');
+  // The immediate superior IS the Reporting Unit: they sign that checklist,
+  // so every case needs one (no Reporting Unit PIC grants any more).
+  if ((creating || 'immediate_superior_email' in out) && !out.immediate_superior_email) {
+    fail(400, "Immediate superior email is required. The superior signs the employee's Reporting Unit clearance");
+  }
   return out;
+}
+
+/** Actual last day may not be earlier than the official last day. */
+function checkLastDays(official, actual) {
+  if (official && actual && String(actual).slice(0, 10) < String(official).slice(0, 10)) {
+    fail(400, 'Actual last day cannot be before the official last day');
+  }
 }
 
 router.post('/cases', handle(async (req, res) => {
@@ -425,6 +437,7 @@ router.post('/cases', handle(async (req, res) => {
   if (!BUSINESS_UNITS.includes(bu)) fail(400, 'Business unit is required');
   if (!access.isHrFor(req.admin, bu)) fail(403, 'You can only invite people in your own business unit');
   const details = validateDetails(body, { creating: true });
+  checkLastDays(details.official_last_day, details.actual_last_day);
   if (details.immediate_superior_email && details.immediate_superior_email === email) {
     fail(400, "The immediate superior can't be the employee themselves");
   }
@@ -477,6 +490,10 @@ router.patch('/cases/:id', handle(async (req, res) => {
     requireNotOwnCase(req, b.case);
     if (!OPEN_STATUSES.includes(b.case.status)) fail(409, 'Closed cases can no longer be edited');
     const details = validateDetails(body, { creating: false });
+    checkLastDays(
+      'official_last_day' in details ? details.official_last_day : b.case.official_last_day,
+      'actual_last_day' in details ? details.actual_last_day : b.case.actual_last_day
+    );
 
     if (body.employee_email !== undefined && lc(body.employee_email) !== b.case.employee_email) {
       if (b.case.status !== 'invited' || b.case.employee_user_id) fail(409, 'The email can only change before the employee opens the invite');
@@ -769,6 +786,142 @@ router.get('/cases/:id/pdf/clearance', handle(async (req, res) => {
 // ---------------------------------------------------------------------------
 // My tasks (sidebar badge + PIC home)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Analytics (HR only). Business-unit admins always see their own BU; super
+// admins see everything, or one BU with ?business_unit=. ?months=3|6|12|24|all
+// keeps cases invited in that window (default 12). Cancelled cases count in
+// the status breakdown only: they never left, so they're kept out of the
+// leaver, reason, tenure and timing figures. Exit reasons are aggregate counts
+// only (no names), and this route is HR-only, like the Exit Interview itself.
+// ---------------------------------------------------------------------------
+const DAYS = (a, b) => `EXTRACT(EPOCH FROM (${a} - ${b})) / 86400.0`;
+const round1 = (v) => (v == null ? null : Math.round(Number(v) * 10) / 10);
+
+router.get('/analytics', handle(async (req, res) => {
+  requireHr(req);
+  const a = req.admin;
+  const today = dates.todayMYT();
+  const values = [today];
+  const push = (v) => { values.push(v); return `$${values.length}`; };
+  const where = [];
+  let scope = 'ALL';
+  if (access.isSuper(a)) {
+    if (req.query.business_unit) {
+      if (!BUSINESS_UNITS.includes(req.query.business_unit)) fail(400, 'Unknown business unit');
+      scope = req.query.business_unit;
+      where.push(`c.business_unit = ${push(scope)}`);
+    }
+  } else {
+    scope = a.unitScope;
+    where.push(`c.business_unit = ${push(scope)}`);
+  }
+  const months = req.query.months == null || req.query.months === '' ? '12' : String(req.query.months);
+  if (months !== 'all') {
+    if (!/^\d{1,3}$/.test(months) || Number(months) < 1 || Number(months) > 120) fail(400, 'months must be 1-120 or "all"');
+    where.push(`c.invited_at >= ($1::date - make_interval(months => ${push(Number(months))}::int))`);
+  }
+  const base = `WITH base AS (
+      SELECT c.*, COALESCE(c.actual_last_day, c.official_last_day) AS last_day, $1::date AS as_of
+        FROM offboarding_cases c ${where.length ? `WHERE ${where.join(' AND ')}` : ''}),
+    left_ AS (SELECT * FROM base WHERE status <> 'cancelled')`;
+  const q = (sql) => db.query(`${base} ${sql}`, values);
+
+  const [status, totals, byBu, leavers, reasons, other, tenure, timing, depts, topDepts, topPositions] = await Promise.all([
+    q('SELECT status, count(*)::int AS count FROM base GROUP BY status'),
+    q(`SELECT count(*)::int AS cases,
+              count(*) FILTER (WHERE status = 'completed')::int AS completed,
+              count(*) FILTER (WHERE status = 'cancelled')::int AS cancelled,
+              count(*) FILTER (WHERE status NOT IN ('completed','cancelled'))::int AS open,
+              count(*) FILTER (WHERE status NOT IN ('completed','cancelled') AND last_day < $1::date)::int AS overdue,
+              count(*) FILTER (WHERE status NOT IN ('completed','cancelled') AND last_day BETWEEN $1::date AND $1::date + 7)::int AS due_7d,
+              count(*) FILTER (WHERE status = 'completed' AND payroll_completed_at >= date_trunc('month', $1::date))::int AS completed_this_month
+         FROM base`),
+    access.isSuper(a) && scope === 'ALL'
+      ? q(`SELECT u.bu AS business_unit, count(b.id)::int AS count
+             FROM unnest(ARRAY['E&C','Land','Mall']) AS u(bu) LEFT JOIN base b ON b.business_unit = u.bu
+            GROUP BY u.bu ORDER BY u.bu`)
+      : Promise.resolve(null),
+    q(`SELECT to_char(last_day, 'YYYY-MM') AS month, count(*)::int AS count
+         FROM left_ WHERE last_day IS NOT NULL GROUP BY 1 ORDER BY 1`),
+    q(`SELECT r AS reason, count(*)::int AS count
+         FROM left_ l JOIN offboarding_exit_interviews e ON e.case_id = l.id, jsonb_array_elements_text(e.reasons) r
+        GROUP BY r`),
+    q(`SELECT count(*)::int AS count FROM left_ l JOIN offboarding_exit_interviews e ON e.case_id = l.id
+        WHERE cardinality(e.reasons_other) > 0`),
+    q(`SELECT CASE WHEN yrs < 1 THEN 'Under 1 year' WHEN yrs < 2 THEN '1-2 years' WHEN yrs < 5 THEN '2-5 years'
+                   WHEN yrs < 10 THEN '5-10 years' ELSE '10+ years' END AS bucket, count(*)::int AS count
+         FROM (SELECT (last_day - date_joined) / 365.25 AS yrs FROM left_ WHERE date_joined IS NOT NULL AND last_day IS NOT NULL) t
+        GROUP BY 1`),
+    q(`, cleared AS (
+          SELECT l.id, l.last_day, l.submitted_at, max(s.signed_at) AS cleared_at
+            FROM left_ l JOIN offboarding_clearance_sections s ON s.case_id = l.id
+           GROUP BY l.id, l.last_day, l.submitted_at
+          HAVING count(*) FILTER (WHERE s.status = 'complete') = ${TOTAL_SECTIONS})
+        SELECT
+          (SELECT avg(${DAYS('submitted_at', 'invited_at')}) FROM left_ WHERE submitted_at IS NOT NULL) AS invite_to_submit,
+          (SELECT avg(${DAYS('cleared_at', 'submitted_at')}) FROM cleared) AS clearance,
+          (SELECT avg(${DAYS('payroll_completed_at', 'acknowledged_at')}) FROM left_ WHERE payroll_completed_at IS NOT NULL AND acknowledged_at IS NOT NULL) AS ack_to_payroll,
+          (SELECT avg(${DAYS('payroll_completed_at', 'invited_at')}) FROM left_ WHERE payroll_completed_at IS NOT NULL) AS invite_to_complete,
+          (SELECT round(100.0 * count(*) FILTER (WHERE (cleared_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date <= last_day) / NULLIF(count(*) FILTER (WHERE last_day IS NOT NULL), 0))
+             FROM cleared) AS on_time_pct`),
+    q(`SELECT d.id AS department_id, d.name AS department,
+              avg(${DAYS('s.signed_at', 'l.submitted_at')}) FILTER (WHERE s.status = 'complete' AND l.submitted_at IS NOT NULL) AS avg_days,
+              count(s.id) FILTER (WHERE s.status = 'complete')::int AS signed,
+              count(s.id) FILTER (WHERE s.status = 'pending' AND l.status = 'clearance_in_progress')::int AS pending,
+              count(s.id) FILTER (WHERE s.status = 'pending' AND l.status = 'clearance_in_progress' AND l.last_day < $1::date)::int AS overdue,
+              count(s.id) FILTER (WHERE s.signed_on_behalf)::int AS on_behalf
+         FROM clearance_departments d
+         LEFT JOIN offboarding_clearance_sections s ON s.department_id = d.id AND s.case_id IN (SELECT id FROM left_)
+         LEFT JOIN left_ l ON l.id = s.case_id
+        GROUP BY d.id, d.name, d.display_order ORDER BY d.display_order`),
+    q(`SELECT COALESCE(NULLIF(trim(department), ''), 'Not specified') AS name, count(*)::int AS count
+         FROM left_ GROUP BY 1 ORDER BY count DESC, name LIMIT 8`),
+    q(`SELECT COALESCE(NULLIF(trim(position), ''), 'Not specified') AS name, count(*)::int AS count
+         FROM left_ GROUP BY 1 ORDER BY count DESC, name LIMIT 8`),
+  ]);
+
+  // Contiguous months (zeros filled) so the trend line has no gaps; max 36.
+  const lm = leavers.rows;
+  const months_ = [];
+  if (lm.length) {
+    let [y, m] = lm[0].month.split('-').map(Number);
+    const [ey, em] = lm[lm.length - 1].month.split('-').map(Number);
+    const map = Object.fromEntries(lm.map((r) => [r.month, r.count]));
+    while ((y < ey || (y === ey && m <= em)) && months_.length < 36) {
+      const key = `${y}-${String(m).padStart(2, '0')}`;
+      months_.push({ month: key, count: map[key] || 0 });
+      m += 1; if (m > 12) { m = 1; y += 1; }
+    }
+  }
+  const statusMap = Object.fromEntries(status.rows.map((r) => [r.status, r.count]));
+  const reasonRows = reasons.rows.concat(other.rows[0].count ? [{ reason: 'Other (own words)', count: other.rows[0].count }] : [])
+    .sort((x, y) => y.count - x.count || x.reason.localeCompare(y.reason));
+  const tenureMap = Object.fromEntries(tenure.rows.map((r) => [r.bucket, r.count]));
+  const t = timing.rows[0];
+
+  res.json({
+    scope,
+    months,
+    today,
+    totals: totals.rows[0],
+    by_status: STATUSES.map((s) => ({ status: s, label: STATUS_LABELS[s], count: statusMap[s] || 0 })),
+    ...(byBu ? { by_bu: byBu.rows } : {}),
+    leavers_by_month: months_,
+    exit_reasons: reasonRows,
+    tenure: ['Under 1 year', '1-2 years', '2-5 years', '5-10 years', '10+ years'].map((b) => ({ bucket: b, count: tenureMap[b] || 0 })),
+    timings: {
+      invite_to_submit_days: round1(t.invite_to_submit),
+      clearance_days: round1(t.clearance),
+      ack_to_payroll_days: round1(t.ack_to_payroll),
+      invite_to_complete_days: round1(t.invite_to_complete),
+      clearance_on_time_pct: t.on_time_pct == null ? null : Number(t.on_time_pct),
+    },
+    departments: depts.rows.map((d) => ({ ...d, avg_days: round1(d.avg_days) })),
+    top_departments: topDepts.rows,
+    top_positions: topPositions.rows,
+  });
+}));
+
 router.get('/my-tasks', handle(async (req, res) => {
   const a = req.admin;
   const email = lc(a.email);

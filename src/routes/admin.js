@@ -894,8 +894,11 @@ router.post('/admins/:admin_user_id/grants', requireSuperAdmin, asyncHandler(asy
     return res.status(400).json({ error: 'business_unit must not be set for a super_admin grant' });
   }
   const departmentId = role === 'clearance_pic' ? Number(req.body.department_id) : null;
-  if (role === 'clearance_pic' && !(departmentId >= 1 && departmentId <= 6)) {
-    return res.status(400).json({ error: 'department_id (1-6) is required for a clearance_pic grant' });
+  if (role === 'clearance_pic' && departmentId === 1) {
+    return res.status(400).json({ error: "The Reporting Unit is always the employee's immediate superior (the superior email HR enters on the case), so it needs no Clearance PIC" });
+  }
+  if (role === 'clearance_pic' && !(departmentId >= 2 && departmentId <= 6)) {
+    return res.status(400).json({ error: 'department_id (2-6) is required for a clearance_pic grant' });
   }
 
   const adminRows = await db.query('SELECT id, email, display_name FROM admin_users WHERE id = $1', [req.params.admin_user_id]);

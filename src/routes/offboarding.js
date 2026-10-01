@@ -205,6 +205,9 @@ router.post('/mine/:id/exit-interview/submit', requireCandidateAuth, handle(asyn
     }
     if (!c.actual_last_day) fail(422, 'Please enter your actual last day', { field: 'actual_last_day' });
     if (c.actual_last_day < today) fail(422, 'Your actual last day cannot be in the past', { field: 'actual_last_day' });
+    if (c.actual_last_day < c.official_last_day) {
+      fail(422, 'Your actual last day cannot be before your official last day', { field: 'actual_last_day' });
+    }
     if ((ei.reasons || []).length === 0 && (ei.reasons_other || []).length === 0) {
       fail(422, 'Please choose at least one reason for leaving, or add your own', { field: 'reasons' });
     }
