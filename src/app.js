@@ -44,6 +44,8 @@ app.get('/api/blacklist-check', requireCandidateAuth, applicationsRoutes.blackli
 app.use('/api/applications', applicationsRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/uploads', uploadsRoutes);
+// Signed links to uploaded files on local disk (own server; see lib/fileStore).
+app.use('/api/files', require('./routes/files'));
 // Offboarding: the daily reminder endpoint (secret-key protected, called by
 // Power Automate) must be mounted before the candidate-auth router.
 app.use('/api/offboarding/cron', offboardingCronRoutes);
