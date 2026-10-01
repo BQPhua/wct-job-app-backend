@@ -27,7 +27,7 @@ const emp = (method, url, token, body) => {
   return body ? r.send(body) : r;
 };
 const GOOD = {
-  notice_period_days: 30, official_last_day: '2026-11-15', actual_last_day: '2026-11-10',
+  notice_period_days: 30, official_last_day: '2026-11-15', actual_last_day: '2026-11-20',
   reasons: ['Better Offer', 'Health'], reasons_other: ['Moving closer to family'], comments: 'Thanks team',
   immediate_superior_name: 'Sue',
 };
@@ -112,6 +112,13 @@ describe('employee flow', () => {
     assert.equal(r.body.field, 'official_last_day');
     r = await submit({ ...GOOD, actual_last_day: '2026-09-01', signature_name: 'Emp', declaration: true });
     assert.equal(r.body.field, 'actual_last_day');
+    r = await submit({ ...GOOD, actual_last_day: '2026-11-14', signature_name: 'Emp', declaration: true });
+    assert.equal(r.status, 422);
+    assert.equal(r.body.field, 'actual_last_day');
+    assert.match(r.body.error, /before your official last day/);
+    // Same day as the official last day passes the date checks (fails later on reasons).
+    r = await submit({ ...GOOD, actual_last_day: GOOD.official_last_day, reasons: [], reasons_other: [], signature_name: 'Emp', declaration: true });
+    assert.equal(r.body.field, 'reasons');
     r = await submit({ ...GOOD, reasons: [], reasons_other: [], signature_name: 'Emp', declaration: true });
     assert.equal(r.body.field, 'reasons');
     r = await submit({ ...GOOD, signature_name: '  ', declaration: true });

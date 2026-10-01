@@ -44,7 +44,7 @@ async function submitted(caseRow) {
   await db().withTransaction(async (client) => {
     const { rows } = await client.query(
       `UPDATE offboarding_cases SET status = 'clearance_in_progress', submitted_at = now(), notice_period_days = 30,
-         actual_last_day = '2026-12-20' WHERE id = $1 RETURNING *`, [caseRow.id]);
+         actual_last_day = '2026-12-31' WHERE id = $1 RETURNING *`, [caseRow.id]);
     await client.query(
       "UPDATE offboarding_exit_interviews SET employee_signature_name = 'Leaver', employee_signed_at = now(), reasons = '[\"Health\"]' WHERE case_id = $1",
       [caseRow.id]);
@@ -122,8 +122,15 @@ describe('invite', () => {
     assert.equal(bad.status, 400);
     const same = await api('post', '/cases', HR_LAND, { employee_email: 's@wct.my', employee_name: 'S', business_unit: 'Land', immediate_superior_email: 's@wct.my' });
     assert.equal(same.status, 400);
+    const noSup = await api('post', '/cases', HR_LAND, { employee_email: 'nosup@wct.my', employee_name: 'N', business_unit: 'Land' });
+    assert.equal(noSup.status, 400);
+    assert.match(noSup.body.error, /superior email is required/i);
+    const early = await api('post', '/cases', HR_LAND, { employee_email: 'early@wct.my', employee_name: 'E', business_unit: 'Land',
+      immediate_superior_email: 'boss@wct.my', official_last_day: '2026-12-31', actual_last_day: '2026-12-30' });
+    assert.equal(early.status, 400);
+    assert.match(early.body.error, /cannot be before the official last day/);
     await invite(HR_LAND, { employee_email: 'dup@wct.my' });
-    const dup = await api('post', '/cases', HR_LAND, { employee_email: 'DUP@wct.my', employee_name: 'Dup', business_unit: 'Land' });
+    const dup = await api('post', '/cases', HR_LAND, { employee_email: 'DUP@wct.my', employee_name: 'Dup', business_unit: 'Land', immediate_superior_email: 'boss@wct.my' });
     assert.equal(dup.status, 409);
   });
 });
@@ -213,6 +220,11 @@ describe('case detail and edits', () => {
     const again = await api('patch', `/cases/${b.case.id}`, HR_LAND, { immediate_superior_email: 'third@wct.my' });
     assert.equal(again.body.sections.find((s) => s.department_id === 1).assignee_email, 'newboss@wct.my');
     assert.equal((await api('patch', `/cases/${b.case.id}`, IT_LAND, { position: 'x' })).status, 403);
+    // actual (2026-12-31) can't move before official, and official can't move past actual
+    assert.equal((await api('patch', `/cases/${b.case.id}`, HR_LAND, { actual_last_day: '2026-12-30' })).status, 400);
+    assert.equal((await api('patch', `/cases/${b.case.id}`, HR_LAND, { official_last_day: '2027-01-05' })).status, 400);
+    assert.equal((await api('patch', `/cases/${b.case.id}`, HR_LAND, { official_last_day: '2026-12-31' })).status, 200);
+    assert.equal((await api('patch', `/cases/${b.case.id}`, HR_LAND, { immediate_superior_email: '' })).status, 400);
   });
 
   test('resend invite only while invited; cancel needs reason and emails employee', async () => {
@@ -265,7 +277,7 @@ describe('clearance', () => {
   });
 
   test('nobody signs their own case', async () => {
-    const b = await submitted(await invite(HR_LAND, { employee_email: 'it.land@wct.my', immediate_superior_email: null }));
+    const b = await submitted(await invite(HR_LAND, { employee_email: 'it.land@wct.my' }));
     const res = await api('put', `/cases/${b.case.id}/sections/2`, IT_LAND, { items: [], sign: { name: 'Me' } });
     assert.equal(res.status, 403);
     assert.match(res.body.error, /own/i);

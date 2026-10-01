@@ -78,10 +78,10 @@ describe('mailer', () => {
     assert.ok(pa.calls[0].body.html.includes('http://fe.test/admin.html?offboarding='));
   });
 
-  test('Reporting Unit without superior goes to Reporting Unit PICs', async () => {
+  test('Reporting Unit without superior (migrated case) goes to HR, never to Reporting Unit PICs', async () => {
     await mailer.send('clearance_task', bundleNoSup, { departmentIds: [1] });
     assert.equal(pa.calls.length, 1);
-    assert.equal(pa.calls[0].body.to, 'ru.land@wct.my');
+    assert.equal(pa.calls[0].body.to, 'hr.land@wct.my');
   });
 
   test('payroll action: payroll PICs, HR in cc, both PDFs attached', async () => {

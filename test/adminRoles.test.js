@@ -116,6 +116,9 @@ test('granting PIC roles validates department and labels the notification', asyn
   assert.equal(noDept.status, 400);
   const badDept = await request().post(url).set(auth).send({ role: 'clearance_pic', business_unit: 'Land', department_id: 99 });
   assert.equal(badDept.status, 400);
+  const ru = await request().post(url).set(auth).send({ role: 'clearance_pic', business_unit: 'Land', department_id: 1 });
+  assert.equal(ru.status, 400);
+  assert.match(ru.body.error, /immediate superior/i);
   const ok = await request().post(url).set(auth).send({ role: 'clearance_pic', business_unit: 'Land', department_id: 2 });
   assert.equal(ok.status, 201);
   const payroll = await request().post(url).set(auth).send({ role: 'payroll_pic', business_unit: 'Mall' });

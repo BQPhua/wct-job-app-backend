@@ -32,7 +32,7 @@ async function submitted(c) {
   await db().withTransaction(async (client) => {
     const { rows } = await client.query(
       `UPDATE offboarding_cases SET status='clearance_in_progress', submitted_at=now(), notice_period_days=0,
-         official_last_day='2026-12-31', actual_last_day='2026-12-20' WHERE id=$1 RETURNING *`, [c.id]);
+         official_last_day='2026-12-20', actual_last_day='2026-12-31' WHERE id=$1 RETURNING *`, [c.id]);
     await client.query(
       `UPDATE offboarding_exit_interviews SET employee_signature_name='X', employee_signed_at=now(),
          reasons='["Conflict with colleague/superior"]', comments='My boss is the problem' WHERE case_id=$1`, [c.id]);
@@ -91,11 +91,11 @@ describe('Important #2 — new superior is told about the Reporting Unit task', 
 
 describe('upgraded minors', () => {
   test('HR cannot manage their own case; payroll cannot pay themselves', async () => {
-    const own = await submitted(await invite({ employee_email: 'hr.land@wct.my', immediate_superior_email: null }, tok('boss@wct.my', 'ALL')));
+    const own = await submitted(await invite({ employee_email: 'hr.land@wct.my', immediate_superior_email: 'someone.else@wct.my' }, tok('boss@wct.my', 'ALL')));
     assert.equal((await api('patch', `/cases/${own.id}`, HR, { position: 'x' })).status, 403);
     assert.equal((await api('post', `/cases/${own.id}/cancel`, HR, { reason: 'x' })).status, 403);
     assert.equal((await api('post', `/cases/${own.id}/hr-signoff`, HR, { name: 'a', position: 'b' })).status, 403);
-    const payOwn = await submitted(await invite({ employee_email: 'pay.land@wct.my', immediate_superior_email: null }));
+    const payOwn = await submitted(await invite({ employee_email: 'pay.land@wct.my', immediate_superior_email: 'someone.else@wct.my' }));
     await db().query("UPDATE offboarding_cases SET status='pending_payroll' WHERE id=$1", [payOwn.id]);
     assert.equal((await api('post', `/cases/${payOwn.id}/payroll-done`, PAY, {})).status, 403);
   });

@@ -115,12 +115,14 @@ describe('access', () => {
     assert.equal(access.canEditSection(PAYROLL_LAND, land.case, sectionOf(land, 2)).ok, false);
   });
 
-  test('Reporting Unit PICs sign only when no superior is assigned', async () => {
+  test('the Reporting Unit belongs to the immediate superior only; HR signs on behalf when none is set', async () => {
     const RU_PIC = staff('Land', { bu_admin: false, payroll_pic: false, clearance_department_ids: [1] }, 'ru@wct.my');
     const withSup = await lifecycle.loadBundle(db(), (await makeCase({ superior: 'superior@wct.my' })).id);
     const noSup = await lifecycle.loadBundle(db(), (await makeCase()).id);
     assert.equal(access.canEditSection(RU_PIC, withSup.case, sectionOf(withSup, 1)).ok, false);
-    assert.equal(access.canEditSection(RU_PIC, noSup.case, sectionOf(noSup, 1)).ok, true);
+    assert.equal(access.canEditSection(RU_PIC, noSup.case, sectionOf(noSup, 1)).ok, false);
+    const hr = access.canEditSection(HR_LAND, noSup.case, sectionOf(noSup, 1), { onBehalf: true });
+    assert.deepEqual(hr, { ok: true, onBehalf: true });
   });
 
   test('caseScopeSql limits rows by BU and role', async () => {
