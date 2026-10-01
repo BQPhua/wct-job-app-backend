@@ -60,6 +60,9 @@ async function roleEmails(role, bu, departmentId = null) {
 
 async function sectionRecipients(caseRow, section) {
   if (section.assignee_email) return [section.assignee_email.toLowerCase()];
+  // Reporting Unit with no superior on file (only possible on cases migrated
+  // from the old system): HR, who can add the superior or sign on behalf.
+  if (section.department_id === 1) return getBuAdminEmails(caseRow.business_unit);
   const pics = await roleEmails('clearance_pic', caseRow.business_unit, section.department_id);
   return pics.length ? pics : getBuAdminEmails(caseRow.business_unit);
 }

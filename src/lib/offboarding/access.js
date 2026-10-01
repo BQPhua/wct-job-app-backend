@@ -168,14 +168,15 @@ function canViewCase(admin, caseRow, sections = []) {
 
 /**
  * Is this session the rightful signer of the section (not on behalf)?
- * Reporting Unit: the assigned superior if one is set, otherwise that BU's
- * Reporting Unit PICs. Other departments: that BU's PICs for the department.
+ * Reporting Unit: only the assigned immediate superior (HR signs on behalf
+ * if none is set). Other departments: that BU's PICs for the department.
  */
 function isSectionOwner(admin, caseRow, section) {
   const email = lc(admin.email);
   if (section.assignee_email) return email !== '' && lc(section.assignee_email) === email;
   if (admin.unitScope === 'SUPERIOR' || !inBu(admin, caseRow.business_unit)) return false;
   if (isSuper(admin)) return false; // super admins act on behalf, never as the PIC
+  if (section.department_id === 1) return false; // Reporting Unit = the named superior only
   return (admin.roles.clearance_department_ids || []).includes(section.department_id);
 }
 
