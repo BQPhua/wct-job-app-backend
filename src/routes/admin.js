@@ -847,10 +847,8 @@ router.post('/admins', requireSuperAdmin, asyncHandler(async (req, res) => {
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return res.status(400).json({ error: 'A valid email is required' });
   }
-  if (!email.toLowerCase().endsWith('@wct.my')) {
-    // UI-hinted requirement (spec §1.5) — enforced here as a hard rule.
-    return res.status(400).json({ error: 'Admin accounts must use an @wct.my email address' });
-  }
+  // Any valid work email is accepted: some admins sign in with a subsidiary
+  // domain (e.g. @wctmalls.wct.my), so the old @wct.my-only rule is gone.
 
   const existing = await db.query('SELECT id FROM admin_users WHERE email = $1', [email.toLowerCase()]);
   if (existing.rows.length > 0) {
