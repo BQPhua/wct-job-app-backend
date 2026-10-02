@@ -61,7 +61,7 @@ function requireAdminAuth(req, res, next) {
     const payload = jwt.verify(token, process.env.ADMIN_JWT_SECRET);
     req.admin = {
       adminUserId: payload.admin_user_id,
-      unitScope: payload.unit_scope, // 'ALL' | 'E&C' | 'Land' | 'Mall' | 'SUPERIOR'
+      unitScope: payload.unit_scope, // 'ALL' | 'E&C' | 'Land' | 'Mall' | 'GROUP' | 'SUPERIOR'
       email: payload.email,
       // { bu_admin, payroll_pic, clearance_department_ids } for this scope —
       // see src/lib/offboarding/access.js for how grants become roles.

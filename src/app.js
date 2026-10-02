@@ -32,6 +32,13 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// ---- Live screen updates (see lib/liveEvents.js) ----
+// Watches every request; after a successful change it pings open admin screens.
+const liveEvents = require('./lib/liveEvents');
+const { requireAdminAuth } = require('./middleware/auth');
+app.use(liveEvents.trackChanges);
+app.get('/api/admin/events', requireAdminAuth, liveEvents.stream);
+
 // ---- Candidate auth (public) ----
 app.use('/api/auth', authRoutes);
 

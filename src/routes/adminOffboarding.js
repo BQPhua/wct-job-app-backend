@@ -157,11 +157,12 @@ async function afterCommitEmail(caseId, actor, eventType, extra = {}) {
 // ---------------------------------------------------------------------------
 router.get('/meta', handle(async (req, res) => {
   const a = req.admin;
+  const all = access.seesAllUnits(a);
   const [depts, companies] = await Promise.all([
     db.query('SELECT id, name, is_reporting_unit FROM clearance_departments ORDER BY display_order'),
     db.query(
-      `SELECT name, business_unit FROM companies ${access.isSuper(a) ? '' : 'WHERE business_unit = $1'} ORDER BY name`,
-      access.isSuper(a) ? [] : [a.unitScope]
+      `SELECT name, business_unit FROM companies ${all ? '' : 'WHERE business_unit = $1'} ORDER BY name`,
+      all ? [] : [a.unitScope]
     ),
   ]);
   res.json({
@@ -172,7 +173,8 @@ router.get('/meta', handle(async (req, res) => {
     unit_scope: a.unitScope,
     email: a.email,
     is_hr: access.isHr(a),
-    business_units: access.isSuper(a) ? BUSINESS_UNITS : (BUSINESS_UNITS.includes(a.unitScope) ? [a.unitScope] : []),
+    all_units: all,
+    business_units: all ? BUSINESS_UNITS : (BUSINESS_UNITS.includes(a.unitScope) ? [a.unitScope] : []),
     companies: a.unitScope === 'SUPERIOR' ? [] : companies.rows,
     today: dates.todayMYT(),
   });
@@ -239,8 +241,7 @@ function mineSql(a, push) {
                     AND sm.department_id = ANY(${push(depts)}::int[]) AND c.business_unit = ${push(a.unitScope)})`);
     }
     if (a.roles.payroll_pic) {
-      parts.push(access.isSuper(a) ? "c.status = 'pending_payroll'"
-        : `(c.status = 'pending_payroll' AND c.business_unit = ${push(a.unitScope)})`);
+      parts.push("c.status = 'pending_payroll'"); // payroll is group-wide
     }
   }
   if (email) {
@@ -261,7 +262,7 @@ function buildListQuery(req) {
   const where = [scope.sql];
   const today = dates.todayMYT();
 
-  if (access.isSuper(a) && BUSINESS_UNITS.includes(q.business_unit)) where.push(`c.business_unit = ${push(q.business_unit)}`);
+  if (access.seesAllUnits(a) && BUSINESS_UNITS.includes(q.business_unit)) where.push(`c.business_unit = ${push(q.business_unit)}`);
   // The summary tiles count everything in scope (+ super admin BU filter),
   // ignoring the other filters, so they only use the placeholders so far.
   const scopeWhere = [...where];
@@ -952,9 +953,8 @@ router.get('/my-tasks', handle(async (req, res) => {
       `SELECT id, ref_no, employee_name, business_unit, position, acknowledged_at,
               COALESCE(actual_last_day, official_last_day) AS last_day
          FROM offboarding_cases
-        WHERE status = 'pending_payroll' ${access.isSuper(a) ? '' : 'AND business_unit = $1'}
-        ORDER BY acknowledged_at NULLS LAST`,
-      access.isSuper(a) ? [] : [a.unitScope]
+        WHERE status = 'pending_payroll'
+        ORDER BY acknowledged_at NULLS LAST`
     );
   }
   const withDays = (r) => ({ ...r, days_left: r.last_day ? dates.daysBetween(today, r.last_day) : null });

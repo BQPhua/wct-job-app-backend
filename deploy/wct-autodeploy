@@ -1,0 +1,128 @@
+#!/bin/bash
+# =============================================================================
+# wct-autodeploy: pull new commits from GitHub and put them live.
+#
+# Runs every minute from a systemd timer (wct-autodeploy.timer). The server
+# pulls from GitHub (GitHub can't reach into the office network), so nothing
+# needs to be opened on the firewall.
+#
+#   Website  (/opt/wct/frontend): fast-forward to origin/main. Live at once.
+#   Backend  (/opt/wct/backend):  fast-forward, `npm ci` if package files
+#            changed, check the app loads, restart, wait for /api/health.
+#            If it isn't healthy within 30 s it rolls back to the previous
+#            commit and remembers the bad one so it doesn't retry it.
+#   Database migrations (new files under db/migrations/) are NEVER run here:
+#            the backend update is held back and logged until a person backs
+#            up, runs the migration by hand, and then runs `sudo wct-update`
+#            (= this script with --migrations-done), which lets it through.
+#
+# Logs:   journalctl -u wct-autodeploy -n 50
+# Pause:  sudo touch /etc/wct/autodeploy.paused   (resume: sudo rm it)
+# =============================================================================
+set -uo pipefail
+MIGRATIONS_DONE=0
+[ "${1:-}" = "--migrations-done" ] && MIGRATIONS_DONE=1
+
+BACKEND=${BACKEND_DIR:-/opt/wct/backend}
+FRONTEND=${FRONTEND_DIR:-/opt/wct/frontend}
+SERVICE=${SERVICE:-wct-backend}
+HEALTH=${HEALTH_URL:-http://localhost:3000/api/health}
+OWNER=${REPO_OWNER:-appadm}
+BRANCH=${BRANCH:-main}
+STATE=${STATE_DIR:-/var/lib/wct/autodeploy}
+PAUSE_FILE=${PAUSE_FILE:-/etc/wct/autodeploy.paused}
+SYSTEMCTL=${SYSTEMCTL:-systemctl}
+HEALTH_WAIT=${HEALTH_WAIT:-30}
+
+log() { echo "[$(date '+%F %T')] $*"; }
+# git/npm run as the repo owner (the folders belong to them, and git refuses
+# to work in someone else's folder as root).
+as_owner() {
+  if [ "$(id -un)" = "$OWNER" ]; then "$@"; else sudo -u "$OWNER" -H "$@"; fi
+}
+g() { as_owner git -C "$1" "${@:2}"; }
+
+mkdir -p "$STATE"
+exec 9>"$STATE/lock"
+flock -n 9 || exit 0                      # a previous run is still going
+if [ -e "$PAUSE_FILE" ]; then exit 0; fi
+
+# fetch_new <dir>: sets CUR and NEW; returns 0 if origin has new commits.
+fetch_new() {
+  g "$1" fetch -q origin "$BRANCH" || { log "ERROR: git fetch failed in $1"; return 2; }
+  CUR=$(g "$1" rev-parse HEAD)
+  NEW=$(g "$1" rev-parse "origin/$BRANCH")
+  [ "$CUR" != "$NEW" ]
+}
+
+# Never hand the lock (fd 9) to anything we start, or it would stay "locked".
+restart_backend() { "$SYSTEMCTL" restart "$SERVICE" 9>&-; }
+
+healthy() {
+  local i
+  for ((i = 0; i < HEALTH_WAIT; i++)); do
+    if curl -fsS -m 3 "$HEALTH" 2>/dev/null | grep -q '"ok"'; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------- website ---
+if [ -d "$FRONTEND/.git" ] && fetch_new "$FRONTEND"; then
+  if g "$FRONTEND" merge -q --ff-only "origin/$BRANCH"; then
+    log "website updated ${CUR:0:7} -> ${NEW:0:7}: $(g "$FRONTEND" log -1 --format=%s)"
+  else
+    log "ERROR: website can't fast-forward (files edited on the server?). Run: cd $FRONTEND && git status"
+  fi
+fi
+
+# ---------------------------------------------------------------- backend ---
+if [ -d "$BACKEND/.git" ] && fetch_new "$BACKEND"; then
+  BAD=$(cat "$STATE/backend.bad" 2>/dev/null || true)
+  if [ "$NEW" = "$BAD" ]; then exit 0; fi   # already rolled back once; wait for a fix
+
+  if [ "$MIGRATIONS_DONE" = 0 ] && [ -n "$(g "$BACKEND" diff --name-only --diff-filter=A "$CUR" "$NEW" -- db/migrations/)" ]; then
+    if [ "$(cat "$STATE/backend.held" 2>/dev/null)" != "$NEW" ]; then
+      log "HELD: backend ${NEW:0:7} adds a database migration:"
+      g "$BACKEND" diff --name-only --diff-filter=A "$CUR" "$NEW" -- db/migrations/ | sed 's/^/          /'
+      log "      Back up, run the migration by hand, then run: sudo wct-update"
+      echo "$NEW" > "$STATE/backend.held"
+    fi
+    exit 0
+  fi
+
+  if ! g "$BACKEND" merge -q --ff-only "origin/$BRANCH"; then
+    log "ERROR: backend can't fast-forward (files edited on the server?). Run: cd $BACKEND && git status"
+    exit 1
+  fi
+  log "backend updating ${CUR:0:7} -> ${NEW:0:7}: $(g "$BACKEND" log -1 --format=%s)"
+
+  rollback() {
+    log "ROLLBACK: $1. Going back to ${CUR:0:7}."
+    g "$BACKEND" reset -q --hard "$CUR"
+    if [ "$PKG_CHANGED" = 1 ]; then as_owner bash -c "cd '$BACKEND' && npm ci --omit=dev --silent"; fi
+    restart_backend
+    echo "$NEW" > "$STATE/backend.bad"
+    if healthy; then log "rolled back; the site is running ${CUR:0:7}. Fix the code on GitHub and push again."
+    else log "ERROR: still unhealthy after rollback. Check: journalctl -u $SERVICE -n 50"; fi
+    exit 1
+  }
+
+  PKG_CHANGED=0
+  if ! g "$BACKEND" diff --quiet "$CUR" "$NEW" -- package.json package-lock.json; then
+    PKG_CHANGED=1
+    log "package.json changed: installing packages"
+    as_owner bash -c "cd '$BACKEND' && npm ci --omit=dev --silent" || rollback "npm ci failed"
+  fi
+  as_owner bash -c "cd '$BACKEND' && NODE_ENV=production node -e \"require('./src/app')\"" >/dev/null 2>"$STATE/load-error.txt" \
+    || rollback "the new code doesn't load: $(grep -m1 -E '(Error|error)' "$STATE/load-error.txt" || tail -n 1 "$STATE/load-error.txt")"
+
+  restart_backend
+  if healthy; then
+    log "backend live at ${NEW:0:7}"
+    rm -f "$STATE/backend.bad" "$STATE/backend.held"
+  else
+    rollback "not healthy within ${HEALTH_WAIT}s after restart"
+  fi
+fi
+exit 0

@@ -128,11 +128,12 @@ router.post('/auth/microsoft', asyncHandler(async (req, res) => {
   // picker when there is more than one. `superior` = no grants at all, but
   // they are the named immediate superior on an open offboarding case, so
   // they may sign in just to clear that Reporting Unit section.
-  const hasGrants = access.isSuper || access.buChoices.length > 0;
+  const hasGrants = access.isSuper || access.isPayroll || access.buChoices.length > 0;
   const superior = !hasGrants && access.superiorSections > 0;
   return res.json({
     authorized: hasGrants || superior,
     is_super_admin: access.isSuper,
+    is_group_payroll: access.isPayroll,
     bu_grants: access.buChoices,
     bu_roles: access.byBu,
     superior,
@@ -173,6 +174,10 @@ router.post('/auth/session', asyncHandler(async (req, res) => {
     }
     unitScope = chosen;
     roles = access.byBu[chosen];
+  } else if (access.isPayroll) {
+    // Payroll PIC with no BU grant: group-wide payroll session.
+    unitScope = 'GROUP';
+    roles = { bu_admin: false, payroll_pic: true, clearance_department_ids: [] };
   } else if (access.superiorSections > 0) {
     // Immediate superior with no grant: may only clear the Reporting Unit
     // sections assigned to their email (enforced in lib/offboarding/access).
@@ -886,7 +891,8 @@ router.post('/admins/:admin_user_id/grants', requireSuperAdmin, asyncHandler(asy
   if (!GRANTABLE.includes(role)) {
     return res.status(400).json({ error: `role must be one of: ${GRANTABLE.join(', ')}` });
   }
-  const needsBu = role !== 'super_admin';
+  // Super Admin and Payroll PIC cover every business unit, so they carry none.
+  const needsBu = !['super_admin', 'payroll_pic'].includes(role);
   if (needsBu && !VALID_BUSINESS_UNITS.includes(businessUnit)) {
     return res.status(400).json({ error: `business_unit is required for a ${role} grant` });
   }

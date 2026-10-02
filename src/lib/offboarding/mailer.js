@@ -16,7 +16,7 @@
 //                      otherwise that BU's clearance PICs for the
 //                      department; → HR when nobody holds that role, so a
 //                      task is never silently dropped
-//   payroll          = that BU's payroll PICs (→ HR when none), HR in cc
+//   payroll          = the Payroll PICs (group-wide; → HR when none), HR in cc
 // ============================================================================
 
 const db = require('../../db');
@@ -50,7 +50,7 @@ async function roleEmails(role, bu, departmentId = null) {
     `SELECT DISTINCT u.email
        FROM admin_grants g
        JOIN admin_users u ON u.id = g.admin_user_id
-      WHERE g.role = $1 AND g.business_unit = $2 AND u.is_active = true
+      WHERE g.role = $1 AND (g.business_unit = $2 OR g.role = 'payroll_pic') AND u.is_active = true
         AND ($3::int IS NULL OR g.department_id = $3)
       ORDER BY u.email`,
     [role, bu, departmentId]

@@ -306,7 +306,10 @@ BEGIN
     VALUES (
       'OFF-' || to_char(COALESCE(r.created_at, now()) AT TIME ZONE 'Asia/Kuala_Lumpur', 'YYYY') || '-' ||
         lpad(nextval('offboarding_ref_seq')::text, 4, '0'),
-      encode(gen_random_bytes(32), 'hex'),
+      -- 64 hex chars from two gen_random_uuid() values (core PostgreSQL,
+      -- strong randomness) — pgcrypto's gen_random_bytes isn't enabled on
+      -- the Azure server.
+      replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''),
       lower(COALESCE(r.app_email, 'unknown+' || r.app_id || '@invalid')),
       COALESCE(NULLIF(r.name_nric, ''), 'Unknown'),
       r.user_id, r.app_id, r.app_bu, r.dept_site,

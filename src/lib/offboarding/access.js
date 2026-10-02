@@ -10,8 +10,13 @@
 //
 //   unit_scope 'ALL'       super admin — every role, every BU
 //   unit_scope 'E&C'|...   BU session — roles held in THAT business unit
+//   unit_scope 'GROUP'     Payroll PIC with no BU grant — payroll for every BU
 //   unit_scope 'SUPERIOR'  immediate superior with no grant — may only work
 //                          on Reporting Unit sections assigned to their email
+//
+// Payroll PIC is group-wide: one Payroll team serves every business unit, so
+// a payroll_pic grant carries no business unit and, in any session, lets the
+// holder see every case and mark payroll done for every BU.
 // ============================================================================
 
 const db = require('../../db');
@@ -42,15 +47,18 @@ async function resolveAdminGrants(email) {
 
   const byBu = {};
   for (const g of grants) {
-    if (!['bu_admin', 'payroll_pic', 'clearance_pic'].includes(g.role)) continue;
+    // payroll_pic is group-wide (see header), so it adds no BU choice. Older
+    // grants that still name a BU are read the same way.
+    if (!['bu_admin', 'clearance_pic'].includes(g.role) || !g.business_unit) continue;
     const r = byBu[g.business_unit] || (byBu[g.business_unit] = { bu_admin: false, payroll_pic: false, clearance_department_ids: [] });
     if (g.role === 'bu_admin') r.bu_admin = true;
-    if (g.role === 'payroll_pic') r.payroll_pic = true;
     if (g.role === 'clearance_pic' && !r.clearance_department_ids.includes(g.department_id)) {
       r.clearance_department_ids.push(g.department_id);
     }
   }
   Object.values(byBu).forEach((r) => r.clearance_department_ids.sort((a, b) => a - b));
+  const isPayroll = grants.some((g) => g.role === 'payroll_pic');
+  Object.values(byBu).forEach((r) => { r.payroll_pic = isPayroll; });
 
   const sup = await db.query(
     `SELECT count(*)::int AS n
@@ -64,6 +72,7 @@ async function resolveAdminGrants(email) {
   return {
     adminUser,
     isSuper: grants.some((g) => g.role === 'super_admin'),
+    isPayroll,
     byBu,
     buChoices: Object.keys(byBu).sort(),
     superiorSections: deactivated ? 0 : sup.rows[0].n,
@@ -90,6 +99,10 @@ function rolesFromClaims(payload) {
 }
 
 const isSuper = (admin) => admin.unitScope === 'ALL';
+/** Payroll PIC — group-wide, whatever BU the session was opened for. */
+const isGroupPayroll = (admin) => admin.unitScope !== 'SUPERIOR' && !!(admin.roles && admin.roles.payroll_pic);
+/** Sessions that read across every business unit. */
+const seesAllUnits = (admin) => isSuper(admin) || isGroupPayroll(admin);
 const isHr = (admin) => isSuper(admin) || !!(admin.roles && admin.roles.bu_admin);
 
 /** Express guard for every job-application admin route (HR only). */
@@ -103,7 +116,7 @@ const DEPARTMENT_NAMES = { 1: 'Reporting Unit', 2: 'IT', 3: 'Administration', 4:
 function formatRoleLabel(role, businessUnit, departmentId) {
   if (role === 'super_admin') return 'Super Admin';
   if (role === 'bu_admin') return `BU Admin (${businessUnit || 'unassigned'})`;
-  if (role === 'payroll_pic') return `Payroll PIC (${businessUnit})`;
+  if (role === 'payroll_pic') return 'Payroll PIC (all business units)';
   if (role === 'clearance_pic') return `Clearance PIC — ${DEPARTMENT_NAMES[departmentId] || 'Department'} (${businessUnit})`;
   return role || '';
 }
@@ -117,8 +130,8 @@ const inBu = (admin, bu) => isSuper(admin) || admin.unitScope === bu;
 
 /** HR (bu_admin) for this BU, or super admin. */
 const isHrFor = (admin, bu) => isSuper(admin) || (admin.unitScope === bu && !!admin.roles.bu_admin);
-/** Payroll PIC for this BU, or super admin. */
-const isPayrollFor = (admin, bu) => isSuper(admin) || (admin.unitScope === bu && !!admin.roles.payroll_pic);
+/** Payroll PIC (group-wide, so any BU) or super admin. */
+const isPayrollFor = (admin, _bu) => isSuper(admin) || isGroupPayroll(admin);
 
 /**
  * SQL predicate (for a WHERE clause on offboarding_cases aliased `alias`)
@@ -126,12 +139,13 @@ const isPayrollFor = (admin, bu) => isSuper(admin) || (admin.unitScope === bu &&
  * $startIndex; returns { sql, values }.
  *
  *  - super admin: everything
- *  - HR / payroll PIC: every case in their BU
+ *  - payroll PIC: every case (group-wide)
+ *  - HR: every case in their BU
  *  - clearance PIC: cases in their BU that have a section of their department
  *  - anyone: cases whose Reporting Unit section is assigned to their email
  */
 function caseScopeSql(admin, alias = 'c', startIndex = 1) {
-  if (isSuper(admin)) return { sql: 'TRUE', values: [] };
+  if (seesAllUnits(admin)) return { sql: 'TRUE', values: [] };
   const values = [];
   const p = (v) => { values.push(v); return `$${startIndex + values.length - 1}`; };
   const parts = [];
@@ -142,7 +156,7 @@ function caseScopeSql(admin, alias = 'c', startIndex = 1) {
   }
   if (admin.unitScope !== 'SUPERIOR') {
     const r = admin.roles || {};
-    if (r.bu_admin || r.payroll_pic) {
+    if (r.bu_admin) {
       parts.push(`${alias}.business_unit = ${p(admin.unitScope)}`);
     } else if (r.clearance_department_ids && r.clearance_department_ids.length) {
       parts.push(`(${alias}.business_unit = ${p(admin.unitScope)} AND EXISTS (
@@ -156,12 +170,12 @@ function caseScopeSql(admin, alias = 'c', startIndex = 1) {
 
 /** JS twin of caseScopeSql for a loaded case + its sections. */
 function canViewCase(admin, caseRow, sections = []) {
-  if (isSuper(admin)) return true;
+  if (seesAllUnits(admin)) return true;
   const email = lc(admin.email);
   if (email && sections.some((s) => lc(s.assignee_email) === email)) return true;
   if (admin.unitScope === 'SUPERIOR' || admin.unitScope !== caseRow.business_unit) return false;
   const r = admin.roles || {};
-  if (r.bu_admin || r.payroll_pic) return true;
+  if (r.bu_admin) return true;
   const depts = r.clearance_department_ids || [];
   return sections.some((s) => depts.includes(s.department_id));
 }
@@ -202,6 +216,8 @@ module.exports = {
   isSectionOwner,
   isHrFor,
   isPayrollFor,
+  isGroupPayroll,
+  seesAllUnits,
   ALL_DEPARTMENT_IDS,
   DEPARTMENT_NAMES,
   resolveAdminGrants,
