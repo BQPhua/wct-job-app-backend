@@ -70,7 +70,7 @@ async function sectionRecipients(caseRow, section) {
 // ---------------------------------------------------------------------------
 // HTML
 // ---------------------------------------------------------------------------
-function layout({ heading, intro, rows = [], button, note }) {
+function layout({ heading, intro, rows = [], button, note, area = 'Offboarding' }) {
   const detail = rows.length ? `
       <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
         ${rows.map(([k, v]) => `<tr>
@@ -87,7 +87,7 @@ function layout({ heading, intro, rows = [], button, note }) {
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F7F6;padding:24px 0">
     <tr><td align="center">
       <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border:1px solid #E4E4E3;border-radius:10px;overflow:hidden">
-        <tr><td style="background:#101B2D;color:#ffffff;padding:18px 28px;font-size:13px;letter-spacing:.06em;text-transform:uppercase">WCT Group · HR &amp; Admin · Offboarding</td></tr>
+        <tr><td style="background:#101B2D;color:#ffffff;padding:18px 28px;font-size:13px;letter-spacing:.06em;text-transform:uppercase">WCT Group · HR &amp; Admin · ${esc(area)}</td></tr>
         <tr><td style="padding:28px">
           <h1 style="font-size:20px;margin:0 0 12px;color:#101B2D">${esc(heading)}</h1>
           <p style="font-size:15px;line-height:1.55;margin:0">${intro}</p>
@@ -165,6 +165,30 @@ const TEMPLATES = {
     rows: caseRows(c),
     button: { label: 'Open case', href: staffLink(c) },
   }),
+  // Automatic follow-ups from the daily reminder run (routes/offboardingCron.js).
+  invite_reminder: ({ case: c }, extra) => ({
+    subject: `Reminder: please complete your Exit Interview (${c.ref_no})`,
+    heading: 'Your Exit Interview is still waiting',
+    intro: `Dear ${esc(c.employee_name)},<br><br>HR started your offboarding ${esc(extra.daysSince)} days ago and your Exit Interview hasn't been submitted yet. Please complete it so the departments can start your clearance before your last working day.`,
+    rows: caseRows(c),
+    button: { label: 'Complete my Exit Interview', href: employeeLink(c) },
+    note: `Sign in with <b>${esc(c.employee_email)}</b>. If you have already left or something is wrong, please contact HR.`,
+  }),
+  ack_reminder: ({ case: c }, extra) => ({
+    subject: `Reminder: please acknowledge your exit clearance (${c.ref_no})`,
+    heading: 'Your acknowledgement is needed',
+    intro: `Dear ${esc(c.employee_name)},<br><br>Your exit clearance was completed ${esc(extra.daysSince)} days ago. Payroll can only process your final pay after you review and acknowledge it.`,
+    rows: caseRows(c),
+    button: { label: 'Review and acknowledge', href: employeeLink(c) },
+  }),
+  payroll_reminder: ({ case: c }, extra) => ({
+    subject: `Reminder: final pay still pending — ${c.employee_name} (${c.ref_no})`,
+    heading: 'Final pay still pending',
+    intro: `${esc(c.employee_name)} acknowledged their exit clearance ${esc(extra.daysSince)} days ago, but payroll hasn't been marked done yet. Once the final pay is processed, open the case and click <b>Mark payroll done</b>.`,
+    rows: caseRows(c, [['Acknowledged on', fmtDate(c.acknowledged_at)]]),
+    button: { label: 'Open case', href: staffLink(c) },
+    note: 'The Exit Interview and Exit Clearance PDFs can be downloaded from the case page.',
+  }),
   completed: ({ case: c }) => ({
     subject: `Your offboarding is complete (${c.ref_no})`,
     heading: 'Offboarding complete',
@@ -188,7 +212,7 @@ async function recipientsFor(eventType, bundle) {
   const c = bundle.case;
   const hr = () => getBuAdminEmails(c.business_unit);
   switch (eventType) {
-    case 'invite': case 'invite_resent': case 'ready_to_ack':
+    case 'invite': case 'invite_resent': case 'ready_to_ack': case 'invite_reminder': case 'ack_reminder':
       return { to: [c.employee_email], cc: [] };
     case 'submitted_hr':
       return { to: await hr(), cc: [] };
@@ -197,7 +221,7 @@ async function recipientsFor(eventType, bundle) {
       const hrList = await hr();
       return pay.length ? { to: pay, cc: hrList.filter((e) => !pay.includes(e)) } : { to: hrList, cc: [] };
     }
-    case 'payroll_hold': {
+    case 'payroll_hold': case 'payroll_reminder': {
       const pay = await roleEmails('payroll_pic', c.business_unit);
       const hrList = await hr();
       return pay.length ? { to: pay, cc: hrList.filter((e) => !pay.includes(e)) } : { to: hrList, cc: [] };
@@ -265,4 +289,4 @@ async function send(eventType, bundle, extra = {}) {
   }
 }
 
-module.exports = { send, fmtDate, esc };
+module.exports = { send, fmtDate, esc, layout };
