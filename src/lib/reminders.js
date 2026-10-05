@@ -87,12 +87,12 @@ async function offboardingFollowUps(today, stats) {
   }
 }
 
-function simpleEmail({ area, to, cc = [], subject, heading, intro, rows = [], button, note, eventType, ref }) {
+function simpleEmail({ area, eyebrow, to, cc = [], subject, heading, intro, rows = [], button, note, eventType, ref }) {
   return sendOffboardingEmail({
     to: [...new Set(to)].join(';'),
     cc: [...new Set(cc)].filter((e) => !to.includes(e)).join(';'),
     subject: `[WCT ${area}] ${subject}`,
-    html: mailer.layout({ heading, intro, rows, button, note, area }),
+    html: mailer.layout({ eyebrow, heading, intro, rows, button, note, area }),
     attachments: [],
     event_type: eventType,
     case_ref: ref || '',
@@ -127,6 +127,7 @@ async function onboardingFollowUps(today, stats) {
     // eslint-disable-next-line no-await-in-loop
     const r = await simpleEmail({
       area: 'Onboarding',
+      eyebrow: 'Onboarding Reminder',
       to: [a.email],
       subject: `Reminder: please complete your onboarding details (${a.reference_no})`,
       heading: 'Your onboarding details are still needed',
@@ -177,6 +178,7 @@ async function hrDigest(today, stats) {
     // eslint-disable-next-line no-await-in-loop
     const r = await simpleEmail({
       area: 'Recruitment',
+      eyebrow: 'Applications Awaiting Review',
       to,
       subject: `${apps.length} application${apps.length === 1 ? '' : 's'} waiting for review — ${bu}`,
       heading: `${apps.length} application${apps.length === 1 ? ' is' : 's are'} waiting for review`,
