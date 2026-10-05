@@ -3,10 +3,10 @@
 // ============================================================================
 // POST /api/offboarding/cron/reminders — the daily clearance reminder run.
 //
-// Called once a day (09:00 MYT) by the "WCT Offboarding Daily Reminder"
-// Power Automate flow (Recurrence → HTTP), rather than an in-process cron:
-// App Service instances can sleep or restart, a scheduled flow can't miss a
-// day because of that. Protected by a shared secret in the `x-cron-key`
+// Called once a day (09:00 MYT): on Azure by the "WCT Offboarding Daily
+// Reminder" Power Automate flow (Recurrence → HTTP); on the office Ubuntu
+// server by the wct-reminders systemd timer (deploy/install-reminders.sh),
+// since the cloud flow can't reach it. Protected by a shared secret in the `x-cron-key`
 // header (OFFBOARDING_CRON_SECRET).
 //
 // Rule (from Qurratu's system): for every case in clearance, days left =
@@ -24,6 +24,7 @@ const lifecycle = require('../lib/offboarding/lifecycle');
 const mailer = require('../lib/offboarding/mailer');
 const dates = require('../lib/offboarding/dates');
 const { REMINDER_WINDOWS } = require('../lib/offboarding/constants');
+const reminders = require('../lib/reminders');
 
 const router = express.Router();
 
@@ -91,7 +92,11 @@ router.post('/reminders', asyncHandler(async (req, res) => {
     });
   }
 
-  return res.json({ today, cases: cases.length, sent, failed, skipped });
+  // Follow-ups: Exit Interview / acknowledgement / payroll / onboarding
+  // reminders and the Monday HR digest (lib/reminders.js).
+  const followUps = await reminders.runFollowUps(today);
+
+  return res.json({ today, cases: cases.length, sent, failed, skipped, follow_ups: followUps });
 }));
 
 module.exports = router;
