@@ -70,35 +70,63 @@ async function sectionRecipients(caseRow, section) {
 // ---------------------------------------------------------------------------
 // HTML
 // ---------------------------------------------------------------------------
-function layout({ heading, intro, rows = [], button, note, area = 'Offboarding' }) {
+// Same look as the job-application emails in Power Automate (logo header,
+// small label, serif heading, ruled detail table, navy button, grey footer),
+// so every email from the portal matches.
+const LOGO_URL = () => process.env.EMAIL_LOGO_URL || 'https://wctjobappstorage.z23.web.core.windows.net/wct-logo.png';
+
+function layout({ eyebrow, heading, intro, rows = [], button, note, area = 'Offboarding' }) {
+  const label = eyebrow || area;
   const detail = rows.length ? `
-      <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
-        ${rows.map(([k, v]) => `<tr>
-          <td style="padding:7px 12px;background:#F7F7F6;border:1px solid #E4E4E3;color:#6E6E6D;width:38%">${esc(k)}</td>
-          <td style="padding:7px 12px;border:1px solid #E4E4E3;color:#1A1A1A">${esc(v)}</td></tr>`).join('')}
-      </table>` : '';
+    <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+      <tbody>${rows.map(([k, v], i) => {
+        const line = i < rows.length - 1 ? 'border-bottom:1px solid #E5E5E4;' : '';
+        return `<tr>
+        <td style="padding:8px 0;${line}font-size:13px;color:#6B6D70;width:40%;">${esc(k)}</td>
+        <td style="padding:8px 0;${line}font-size:13px;color:#1A1A1A;${i === 0 ? 'font-weight:bold;' : ''}">${esc(v)}</td>
+      </tr>`;
+      }).join('')}
+    </tbody></table>` : '';
   const btn = button ? `
-      <p style="margin:24px 0">
-        <a href="${esc(button.href)}" style="background:#3E5C76;color:#ffffff;text-decoration:none;padding:11px 22px;border-radius:8px;font-weight:600;display:inline-block">${esc(button.label)}</a>
-      </p>
-      <p style="font-size:12px;color:#6E6E6D;margin:0 0 8px">If the button doesn't work, copy this link into your browser:<br>
-        <span style="word-break:break-all">${esc(button.href)}</span></p>` : '';
-  return `<!doctype html><html><body style="margin:0;background:#F7F7F6;font-family:Segoe UI,Arial,sans-serif;color:#1A1A1A">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F7F7F6;padding:24px 0">
-    <tr><td align="center">
-      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border:1px solid #E4E4E3;border-radius:10px;overflow:hidden">
-        <tr><td style="background:#101B2D;color:#ffffff;padding:18px 28px;font-size:13px;letter-spacing:.06em;text-transform:uppercase">WCT Group · HR &amp; Admin · ${esc(area)}</td></tr>
-        <tr><td style="padding:28px">
-          <h1 style="font-size:20px;margin:0 0 12px;color:#101B2D">${esc(heading)}</h1>
-          <p style="font-size:15px;line-height:1.55;margin:0">${intro}</p>
-          ${detail}${btn}
-          ${note ? `<p style="font-size:13px;color:#6E6E6D;line-height:1.5;margin:16px 0 0">${note}</p>` : ''}
-        </td></tr>
-        <tr><td style="padding:14px 28px;border-top:1px solid #E4E4E3;font-size:12px;color:#6E6E6D">This is an automated message from the WCT Job Application &amp; Offboarding system. Please do not reply to this email.</td></tr>
-      </table>
-    </td></tr>
-  </table></body></html>`;
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:8px;">
+      <tbody><tr>
+        <td style="background:#101B2D;border-radius:8px;">
+          <a href="${esc(button.href)}" style="display:inline-block;padding:11px 22px;font-size:13.5px;font-weight:bold;color:#ffffff;text-decoration:none;">${esc(button.label)} &rarr;</a>
+        </td>
+      </tr></tbody></table>
+    <p style="font-size:11px;line-height:1.5;color:#6B6D70;margin:8px 0 0;">If the button doesn't work, copy this link into your browser:<br><span style="word-break:break-all;">${esc(button.href)}</span></p>` : '';
+  return `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;background:#ffffff;">
+
+  <div style="background:#101B2D;padding:20px 28px;">
+    <img src="${esc(LOGO_URL())}" alt="WCT Group" style="height:32px;">
+  </div>
+
+  <div style="padding:28px;color:#1A1A1A;">
+    <p style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#3E5C76;font-weight:bold;margin:0 0 8px;">${esc(label)}</p>
+    <h2 style="font-family:Georgia,serif;color:#101B2D;margin:0 0 16px;font-size:20px;">${esc(heading)}</h2>
+    <p style="font-size:14px;line-height:1.6;color:#333333;margin:0 0 20px;">${intro}</p>
+    ${detail}${btn}
+    ${note ? `<p style="font-size:13px;line-height:1.6;color:#6B6D70;margin:16px 0 0;">${note}</p>` : ''}
+  </div>
+
+  <div style="padding:16px 28px;background:#F6F6F5;border-top:1px solid #E5E5E4;">
+    <p style="font-size:11px;color:#6B6D70;margin:0;">This is an automated notification from the WCT Group Employment Application Portal. Please do not reply directly to this email.</p>
+  </div>
+
+</div>`;
 }
+
+// Small label above each heading.
+const EYEBROW = {
+  invite: 'Exit Interview', invite_resent: 'Exit Interview',
+  submitted_hr: 'Exit Interview Submitted',
+  clearance_task: 'Clearance Task', reminder: 'Clearance Reminder',
+  ready_to_ack: 'Clearance Completed',
+  payroll_action: 'Payroll Action Needed', payroll_hold: 'Payroll On Hold',
+  invite_reminder: 'Exit Interview Reminder', ack_reminder: 'Acknowledgement Reminder',
+  payroll_reminder: 'Final Pay Reminder',
+  completed: 'Offboarding Completed', cancelled: 'Offboarding Cancelled',
+};
 
 const caseRows = (c, extra = []) => [
   ['Reference', c.ref_no],
@@ -238,7 +266,7 @@ async function post(eventType, bundle, content, to, cc, attachments = [], extraF
     to: [...new Set(to)].join(';'),
     cc: [...new Set(cc)].join(';'),
     subject: `[WCT Offboarding] ${content.subject}`,
-    html: layout(content),
+    html: layout({ eyebrow: EYEBROW[eventType], ...content }),
     attachments,
     event_type: eventType,
     case_ref: bundle.case.ref_no,
@@ -289,4 +317,4 @@ async function send(eventType, bundle, extra = {}) {
   }
 }
 
-module.exports = { send, fmtDate, esc, layout };
+module.exports = { send, fmtDate, esc, layout, EYEBROW };
