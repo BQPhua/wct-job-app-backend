@@ -70,10 +70,9 @@ async function sectionRecipients(caseRow, section) {
 // ---------------------------------------------------------------------------
 // HTML
 // ---------------------------------------------------------------------------
-// Same look as the job-application emails in Power Automate (logo header,
-// small label, serif heading, ruled detail table, navy button, grey footer),
-// so every email from the portal matches.
-const LOGO_URL = () => process.env.EMAIL_LOGO_URL || 'https://wctjobappstorage.z23.web.core.windows.net/wct-logo.png';
+// Same look as the job-application emails in Power Automate (navy header,
+// small label, serif heading, ruled detail table, navy button, grey footer).
+// The header carries the company name as text, not the logo image.
 
 function layout({ eyebrow, heading, intro, rows = [], button, note, area = 'Offboarding' }) {
   const label = eyebrow || area;
@@ -98,7 +97,7 @@ function layout({ eyebrow, heading, intro, rows = [], button, note, area = 'Offb
   return `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;background:#ffffff;">
 
   <div style="background:#101B2D;padding:20px 28px;">
-    <img src="${esc(LOGO_URL())}" alt="WCT Group" style="height:32px;">
+    <p style="margin:0;font-family:Georgia,serif;font-size:18px;font-weight:bold;letter-spacing:.04em;color:#ffffff;">WCT Group</p>
   </div>
 
   <div style="padding:28px;color:#1A1A1A;">
