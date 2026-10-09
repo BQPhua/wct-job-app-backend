@@ -236,6 +236,44 @@ router.post('/oauth/microsoft', asyncHandler(async (req, res) => {
   return handleOAuthSignIn(res, identity, 'microsoft');
 }));
 
+// ============================================================================
+// TEMPORARY test sign-in (see lib/testLogin.js): off unless switched on in
+// the server's env file. GET tells the login page whether to show it.
+// ============================================================================
+const testLogin = require('../lib/testLogin');
+
+router.get('/test-login', (req, res) => res.json(testLogin.status()));
+
+// POST /api/auth/test-login  { email, name?, passcode }
+router.post('/test-login', asyncHandler(async (req, res) => {
+  const { email: rawEmail, name, passcode } = req.body || {};
+  const email = String(rawEmail || '').trim().toLowerCase();
+  if (!isValidEmail(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  try {
+    testLogin.check(req, passcode, `candidate ${email}`);
+  } catch (err) {
+    return res.status(err.status || 401).json({ error: err.message });
+  }
+
+  const blacklisted = await db.query(
+    'SELECT 1 FROM candidate_blacklist WHERE email = $1 AND is_blacklisted = true', [email]
+  );
+  if (blacklisted.rows.length > 0) return res.status(403).json({ error: 'blacklisted' });
+
+  // Existing account with this email → sign in as it (nothing about it is
+  // changed). Otherwise create one with no password.
+  let { rows } = await db.query('SELECT id, email, full_name FROM users WHERE email = $1', [email]);
+  if (rows.length === 0) {
+    ({ rows } = await db.query(
+      `INSERT INTO users (email, password_hash, full_name, auth_provider)
+       VALUES ($1, NULL, $2, 'test') RETURNING id, email, full_name`,
+      [email, (typeof name === 'string' && name.trim()) ? name.trim().slice(0, 120) : null]
+    ));
+  }
+  const user = rows[0];
+  return res.json({ token: issueToken(user), user: { id: user.id, email: user.email, name: user.full_name || '' } });
+}));
+
 // In-memory reset-token store as a placeholder until real email delivery
 // exists. NOTE: this does not survive a process restart / multi-instance
 // deployment — acceptable only because actual email sending (the thing that
@@ -260,7 +298,7 @@ router.post('/reset-password/request', asyncHandler(async (req, res) => {
     // SendGrid instead of only logging it. Logged here purely so the flow is
     // exercisable in this pass without live email delivery.
     // eslint-disable-next-line no-console
-    console.log(`[auth] password reset requested for ${email}; token=${token} (TODO: email this instead of logging)`);
+    console.log(`[auth] password reset requested for ${email}${process.env.RESET_TOKEN_LOG === '1' ? `; token=${token}` : ''}`);
   }
 
   return res.json({ ok: true });
