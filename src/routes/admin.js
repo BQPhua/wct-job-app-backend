@@ -40,12 +40,10 @@ const ALL_KNOWN_STATUSES = [
   'offer_sent', 'withdrawn', 'kiv', 'hired', 'rejected', 'blacklisted',
 ];
 
-// Base URL of the deployed candidate/admin frontend, used to build the deep
-// links embedded in Power Automate notification payloads (the original app's
-// functions hardcoded its GitHub Pages URL, e.g.
-// 'https://bqphua.github.io/job-app'; this points at wherever the migrated
-// frontend ends up deployed — Azure Static Web Apps).
-const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || 'https://bqphua.github.io/job-app';
+// Base URL of the live candidate/admin site, used to build the links in
+// Power Automate notification payloads. Set FRONTEND_BASE_URL in the server's
+// env file; falls back to the live address.
+const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || 'https://hrforms.wct.my';
 
 function isSuperAdmin(admin) {
   return admin.unitScope === 'ALL';
@@ -102,35 +100,19 @@ function requireSuperAdmin(req, res, next) {
 // attemptAdminBootstrap(): the frontend calls this right after MSAL sign-in,
 // then either shows "not set up as an admin" (authorized: false), a BU
 // picker (bu_grants.length > 1), or proceeds straight to /auth/session.
-// Who is signing in: a verified Microsoft ID token, or (only while the
-// temporary test sign-in is switched on, see lib/testLogin.js) an email +
-// the shared test passcode. Either way the admin grants below decide access.
-const testLogin = require('../lib/testLogin');
-async function adminIdentity(req) {
-  const body = req.body || {};
-  if (body.test_email !== undefined) {
-    const email = String(body.test_email || '').trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw Object.assign(new Error('Enter a valid email address.'), { status: 400 });
-    testLogin.check(req, body.test_passcode, `admin ${email}`);
-    return { email, subject: null, test: true };
-  }
-  if (!body.id_token) throw Object.assign(new Error('id_token is required'), { status: 400 });
-  try {
-    return await oauthVerify.verifyMicrosoftIdToken(body.id_token, process.env.ADMIN_MS_CLIENT_ID);
-  } catch (err) {
-    throw Object.assign(new Error(`Invalid Microsoft sign-in: ${err.message}`), { status: 401 });
-  }
-}
-const identityOr = async (req, res) => {
-  try { return await adminIdentity(req); } catch (err) { res.status(err.status || 400).json({ error: err.message }); return null; }
-};
-
 router.post('/auth/microsoft', asyncHandler(async (req, res) => {
-  const identity = await identityOr(req, res);
-  if (!identity) return undefined;
+  const { id_token: idToken } = req.body || {};
+  if (!idToken) return res.status(400).json({ error: 'id_token is required' });
+
+  let identity;
+  try {
+    identity = await oauthVerify.verifyMicrosoftIdToken(idToken, process.env.ADMIN_MS_CLIENT_ID);
+  } catch (err) {
+    return res.status(401).json({ error: `Invalid Microsoft sign-in: ${err.message}` });
+  }
 
   const access = await resolveAdminGrants(identity.email);
-  if (access.adminUser && identity.subject) {
+  if (access.adminUser) {
     // First-sign-in linking (spec §2.6: auth_user_id stays NULL until first
     // successful sign-in) — now the real Entra `oid` claim, verified above.
     await db.query(
@@ -164,9 +146,15 @@ router.post('/auth/microsoft', asyncHandler(async (req, res) => {
 // itself just checked the signature of — a client can no longer mint a
 // session for an arbitrary admin_user_id by simply naming one.
 router.post('/auth/session', asyncHandler(async (req, res) => {
-  const { business_unit: businessUnit } = req.body || {};
-  const identity = await identityOr(req, res);
-  if (!identity) return undefined;
+  const { id_token: idToken, business_unit: businessUnit } = req.body || {};
+  if (!idToken) return res.status(400).json({ error: 'id_token is required' });
+
+  let identity;
+  try {
+    identity = await oauthVerify.verifyMicrosoftIdToken(idToken, process.env.ADMIN_MS_CLIENT_ID);
+  } catch (err) {
+    return res.status(401).json({ error: `Invalid Microsoft sign-in: ${err.message}` });
+  }
 
   const access = await resolveAdminGrants(identity.email);
   let unitScope;
