@@ -24,7 +24,7 @@ const { sendOffboardingEmail } = require('../powerAutomate');
 const { getBuAdminEmails } = require('../notificationHelpers');
 const pdf = require('./pdf');
 
-const frontend = () => process.env.FRONTEND_BASE_URL || 'https://bqphua.github.io/job-app';
+const frontend = () => process.env.FRONTEND_BASE_URL || 'https://hrforms.wct.my';
 const employeeLink = (c) => `${frontend()}/index.html?offboard=${encodeURIComponent(c.invite_token)}`;
 const staffLink = (c) => `${frontend()}/admin.html?offboarding=${encodeURIComponent(c.id)}`;
 
