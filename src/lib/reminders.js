@@ -33,7 +33,7 @@ const STEPS = {
 };
 const HR_DIGEST_MIN_DAYS = 3;
 
-const frontend = () => process.env.FRONTEND_BASE_URL || 'https://bqphua.github.io/job-app';
+const frontend = () => process.env.FRONTEND_BASE_URL || 'https://hrforms.wct.my';
 const daysSince = (today, ts) => (ts ? dates.daysBetween(new Date(ts).toISOString().slice(0, 10), today) : null);
 
 async function sentSteps(kind, refKey) {
