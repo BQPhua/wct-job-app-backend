@@ -38,7 +38,7 @@ const BUSINESS_UNITS = ['E&C', 'Land', 'Mall'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const lc = (v) => (v == null ? '' : String(v).trim().toLowerCase());
 const clean = (v) => { if (v == null) return null; const s = String(v).trim(); return s === '' ? null : s; };
-const frontend = () => process.env.FRONTEND_BASE_URL || 'https://bqphua.github.io/job-app';
+const frontend = () => process.env.FRONTEND_BASE_URL || 'https://hrforms.wct.my';
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
