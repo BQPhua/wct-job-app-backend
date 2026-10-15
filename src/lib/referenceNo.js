@@ -41,12 +41,14 @@ function buCodeFor(businessUnit) {
  * INSERT that will consume this number).
  *
  * @param {import('pg').PoolClient} client
- * @param {string} businessUnit - 'E&C' | 'Land' | 'Mall'
+ * @param {string} businessUnit - a business_units.code (e.g. 'E&C', 'Land', 'REIT')
  * @returns {Promise<string>}
  */
 async function generateReferenceNo(client, businessUnit) {
   const year = CURRENT_YEAR_FALLBACK();
-  const buCode = buCodeFor(businessUnit);
+  // The unit's own prefix from Business Unit Settings (migration 008).
+  const bu = await client.query('SELECT ref_code FROM business_units WHERE code = $1', [businessUnit]);
+  const buCode = (bu.rows[0] && bu.rows[0].ref_code) || buCodeFor(businessUnit);
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS reference_no_counters (
