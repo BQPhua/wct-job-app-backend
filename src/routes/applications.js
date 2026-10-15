@@ -19,11 +19,11 @@ const { buildPatchUpdate, stripEmptyStrings } = require('../lib/patchMerge');
 const { generateReferenceNo } = require('../lib/referenceNo');
 const { notify, sanitizeNotificationPayload } = require('../lib/powerAutomate');
 const { getBuAdminEmails } = require('../lib/notificationHelpers');
+const businessUnits = require('../lib/businessUnits');
+const { sendApplicationReceived } = require('../lib/candidateEmails');
 
 const router = express.Router();
 router.use(requireCandidateAuth);
-
-const VALID_BUSINESS_UNITS = ['E&C', 'Land', 'Mall'];
 
 // Columns a candidate's own PATCH /api/applications/:id may touch (spec
 // §6.2). Deliberately excludes: id, user_id, reference_no, status,
@@ -55,14 +55,52 @@ const APPLICATION_PATCH_COLUMNS = [
   'declaration_other_matters', 'declaration_other_matters_specify',
   'profile_picture_url', 'attachments', // jsonb array; see task brief re: pre-uploaded file metadata/URL patch pattern
   'language_choice',
+  // Form v2 (migration 008): two-line addresses, "no previous working
+  // experience", and the optional family details moved here from onboarding.
+  'permanent_address2', 'permanent_city', 'permanent_state',
+  'correspondence_address2', 'correspondence_city', 'correspondence_state',
+  'no_working_experience',
+  'spouse_name', 'spouse_nric', 'spouse_date_of_birth', 'spouse_working',
+  'children_below_18', 'children_18_to_23', // jsonb — always sent in full
 ];
+
+// ---------------------------------------------------------------------------
+// Shape checks for the fields admins later see as links, images and ratings.
+// File links must be ones our own upload endpoint produced (/api/files/...,
+// or an old Azure Blob link), so a crafted value can't become script in the
+// admin dashboard.
+// ---------------------------------------------------------------------------
+const FILE_URL_RE = /^(\/api\/files\/[A-Za-z0-9._\/-]+\?exp=\d{1,12}&sig=[A-Za-z0-9_-]+|https:\/\/[a-z0-9-]+\.blob\.core\.windows\.net\/[A-Za-z0-9._~%\/?&=:+-]+)$/;
+const DOC_CATEGORIES = ['ic_front', 'ic_back', 'resume', 'academic', 'payslip', 'other'];
+const RATINGS = ['', 'Good', 'Fair', 'Slight'];
+function invalidPatchReason(p) {
+  if (p.profile_picture_url != null && !FILE_URL_RE.test(String(p.profile_picture_url))) return 'profile_picture_url must be an uploaded file link';
+  if (p.attachments !== undefined) {
+    if (!Array.isArray(p.attachments) || p.attachments.length > 60) return 'attachments must be a list (at most 60 files)';
+    for (const f of p.attachments) {
+      if (!f || typeof f !== 'object' || !FILE_URL_RE.test(String(f.url || ''))) return 'Each attachment must be an uploaded file link';
+      if (typeof f.name !== 'string' || f.name.length > 255) return 'Each attachment needs a file name';
+      if (f.category !== undefined && !DOC_CATEGORIES.includes(f.category)) return `attachment category must be one of ${DOC_CATEGORIES.join(', ')}`;
+      if (f.type !== undefined && !/^[\w.+-]+\/[\w.+-]+$/.test(String(f.type))) return 'attachment type is not a valid file type';
+    }
+  }
+  if (p.language_ability !== undefined) {
+    if (!Array.isArray(p.language_ability) || p.language_ability.length > 30) return 'language_ability must be a list';
+    if (p.language_ability.some((l) => !l || !RATINGS.includes(l.spoken || '') || !RATINGS.includes(l.written || ''))) return 'Language ratings must be Good, Fair or Slight';
+  }
+  return null;
+}
 
 // POST /api/applications  (rpc_create_draft)
 router.post('/', asyncHandler(async (req, res) => {
-  const { business_unit: businessUnit } = req.body || {};
-  if (!VALID_BUSINESS_UNITS.includes(businessUnit)) {
-    return res.status(400).json({ error: `business_unit must be one of ${VALID_BUSINESS_UNITS.join(', ')}` });
+  // The candidate link's ?bu= may carry the code ("Land") or the display
+  // name ("Property Development"); either way the code is what's stored.
+  const bu = await businessUnits.resolve((req.body || {}).business_unit);
+  if (!bu || !bu.is_active) {
+    const active = await businessUnits.list({ activeOnly: true });
+    return res.status(400).json({ error: `business_unit must be one of ${active.map((u) => u.code).join(', ')}` });
   }
+  const businessUnit = bu.code;
 
   const result = await db.withTransaction(async (client) => {
     const referenceNo = await generateReferenceNo(client, businessUnit);
@@ -119,6 +157,8 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   }
 
   const cleanPatch = stripEmptyStrings(patch);
+  const invalid = invalidPatchReason(cleanPatch);
+  if (invalid) return res.status(400).json({ error: invalid });
   const update = buildPatchUpdate('applications', 'id', req.params.id, cleanPatch, APPLICATION_PATCH_COLUMNS, {
     extraWhere: { user_id: req.user.id },
   });
@@ -176,11 +216,23 @@ router.post('/:id/submit', asyncHandler(async (req, res) => {
   // Power Automate notification (mirrors the original
   // `notify_power_automate_on_submit` trigger) — fire-and-forget, must never
   // fail the candidate's submit request.
+  // HR admins of the unit plus its designated PIC (Business Unit Settings).
+  const unit = await businessUnits.get(submittedApp.business_unit);
   const notifyEmails = await getBuAdminEmails(submittedApp.business_unit);
+  if (unit && unit.pic_email) notifyEmails.push(...unit.pic_email.toLowerCase().split(/[;,]\s*/).filter(Boolean));
   notify('submit', sanitizeNotificationPayload({
     ...submittedApp,
-    notify_email: notifyEmails.join(';'),
+    business_unit_name: unit ? unit.name : submittedApp.business_unit,
+    notify_email: [...new Set(notifyEmails)].join(';'),
   }));
+
+  // Candidate's confirmation email, built here so its wording and logo are
+  // ours (stakeholder feedback). Switched on with CANDIDATE_CONFIRMATION_EMAIL
+  // once the old candidate email step is removed from the Submit flow, so
+  // nobody gets two. Fire-and-forget like the notification above.
+  if (/^(1|on|true|yes)$/i.test(process.env.CANDIDATE_CONFIRMATION_EMAIL || '')) {
+    sendApplicationReceived(submittedApp, unit).catch((err) => console.error('application_received email failed:', err.message));
+  }
 
   return res.json(submittedApp);
 }));
