@@ -548,10 +548,14 @@ router.patch('/applications/:id', asyncHandler(async (req, res) => {
     updated.status !== 'draft'
   ) {
     const notifyEmail = await getManagerEmail(updated.business_unit);
+    const names = await businessUnits.nameMap();
     notify('bu_transfer', sanitizeNotificationPayload({
       ...updated,
       notify_email: notifyEmail,
       from_business_unit: app.business_unit || '',
+      // Display names ("Property Development") for the email wording.
+      business_unit_name: names[updated.business_unit] || updated.business_unit,
+      from_business_unit_name: names[app.business_unit] || app.business_unit || '',
     }));
   }
 
@@ -694,7 +698,10 @@ router.post('/applications/:id/status', asyncHandler(async (req, res) => {
   const NOTIFY_STATUSES = ['under_review', 'shortlisted', 'interview_scheduled', 'offer_sent', 'hired', 'rejected', 'withdrawn', 'blacklisted'];
   if (NOTIFY_STATUSES.includes(result.status)) {
     const notifyEmail = await getManagerEmail(result.business_unit);
-    notify('status_change', sanitizeNotificationPayload({ ...result, notify_email: notifyEmail }));
+    const names = await businessUnits.nameMap();
+    notify('status_change', sanitizeNotificationPayload({
+      ...result, notify_email: notifyEmail, business_unit_name: names[result.business_unit] || result.business_unit,
+    }));
   }
 
   return res.json(result);
