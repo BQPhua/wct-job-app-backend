@@ -355,6 +355,32 @@ const ONBOARDING_COLUMNS_SQL = `
   (SELECT max(n.sent_at) FROM notification_log n
     WHERE n.ref_key = applications.id::text AND n.step > 0
       AND n.kind IN ('onboarding_reminder', 'onboarding_reminder_manual')) AS last_onboarding_reminder_at`;
+// Same columns without the reminder log, used when notification_log can't be
+// read (table missing, or the app's database login has no rights on it).
+const ONBOARDING_COLUMNS_NO_LOG_SQL = `
+  COALESCE((SELECT o.status FROM onboarding_records o WHERE o.application_id = applications.id), 'not_started') AS onboarding_status,
+  NULL::timestamptz AS last_onboarding_reminder_at`;
+
+let warnedNoLog = false;
+/**
+ * Run a query that includes the onboarding columns. If the reminder log
+ * can't be read (42501 permission denied / 42P01 missing table), retry
+ * without it so the dashboard still lists applications — only the
+ * "last reminded" date is blank — and log how to fix the database once.
+ */
+async function queryWithOnboardingColumns(buildSql, values) {
+  try {
+    return await db.query(buildSql(ONBOARDING_COLUMNS_SQL), values);
+  } catch (err) {
+    if (!['42501', '42P01'].includes(err.code) || !/notification_log/.test(err.message || '')) throw err;
+    if (!warnedNoLog) {
+      warnedNoLog = true;
+      // eslint-disable-next-line no-console
+      console.error(`notification_log not readable (${err.message}). Run scripts/fix-db-permissions.sh on the server.`);
+    }
+    return db.query(buildSql(ONBOARDING_COLUMNS_NO_LOG_SQL), values);
+  }
+}
 
 // GET /api/admin/applications  (rpc_admin_search_applications)
 router.get('/applications', asyncHandler(async (req, res) => {
@@ -394,9 +420,10 @@ router.get('/applications', asyncHandler(async (req, res) => {
   const total = countResult.rows[0].total;
 
   const dataValues = values.concat([pageSize, (page - 1) * pageSize]);
-  const { rows } = await db.query(
-    `SELECT applications.*, ${ONBOARDING_COLUMNS_SQL}
-       FROM applications ${whereSql} ORDER BY created_at DESC LIMIT $${i++} OFFSET $${i++}`,
+  const limitSql = `LIMIT $${i++} OFFSET $${i++}`;
+  const { rows } = await queryWithOnboardingColumns(
+    (cols) => `SELECT applications.*, ${cols}
+       FROM applications ${whereSql} ORDER BY created_at DESC ${limitSql}`,
     dataValues
   );
 
@@ -637,7 +664,7 @@ router.post('/applications/:id/onboarding-reminder', asyncHandler(async (req, re
   if (!app) return;
   const r = await remindOnboarding(app);
   if (!r.ok) return res.status(r.status).json({ error: r.error });
-  const { rows } = await db.query(`SELECT ${ONBOARDING_COLUMNS_SQL} FROM applications WHERE id = $1`, [app.id]);
+  const { rows } = await queryWithOnboardingColumns((cols) => `SELECT ${cols} FROM applications WHERE id = $1`, [app.id]);
   return res.json(rows[0]);
 }));
 
@@ -695,7 +722,9 @@ router.post('/applications/:id/status', asyncHandler(async (req, res) => {
   // Power Automate notification (mirrors the original
   // `notify_power_automate_on_status_change` trigger) — only for the
   // HR-visible transitions the original trigger fired on.
-  const NOTIFY_STATUSES = ['under_review', 'shortlisted', 'interview_scheduled', 'offer_sent', 'hired', 'rejected', 'withdrawn', 'blacklisted'];
+  // 'rejected' is deliberately left out (HR decision, 15 Oct 2026): rejected
+  // candidates are no longer emailed when their status changes.
+  const NOTIFY_STATUSES = ['under_review', 'shortlisted', 'interview_scheduled', 'offer_sent', 'hired', 'withdrawn', 'blacklisted'];
   if (NOTIFY_STATUSES.includes(result.status)) {
     const notifyEmail = await getManagerEmail(result.business_unit);
     const names = await businessUnits.nameMap();
