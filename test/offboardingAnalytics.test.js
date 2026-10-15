@@ -128,7 +128,7 @@ test('timings and department turnaround', async () => {
 test('super admin sees every BU with a BU breakdown, and can filter one BU', async () => {
   const all = (await api('/analytics?months=all', SUPER)).body;
   assert.equal(all.totals.cases, 4);
-  assert.deepEqual(all.by_bu.map((b) => [b.business_unit, b.count]), [['E&C', 0], ['Land', 3], ['Mall', 1]]);
+  assert.deepEqual(all.by_bu.map((b) => [b.business_unit, b.count]), [['E&C', 0], ['Land', 3], ['Mall', 1], ['REIT', 0], ['Aviation', 0], ['F&B', 0], ['Hotels', 0]]);
   const mall = (await api('/analytics?months=all&business_unit=Mall', SUPER)).body;
   assert.equal(mall.totals.cases, 1);
   assert.equal(mall.scope, 'Mall');
