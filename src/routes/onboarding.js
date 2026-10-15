@@ -9,6 +9,7 @@
 // applications, not directly with users).
 // ============================================================================
 
+const businessUnits = require('../lib/businessUnits');
 const express = require('express');
 const db = require('../db');
 const asyncHandler = require('../lib/asyncHandler');
@@ -179,6 +180,7 @@ router.post('/:application_id/confirm-section', asyncHandler(async (req, res) =>
       reference_no: ctx.app.reference_no || '',
       name_nric: ctx.app.name_nric || '',
       business_unit: ctx.app.business_unit || '',
+      business_unit_name: (await businessUnits.nameMap())[ctx.app.business_unit] || ctx.app.business_unit || '',
     }));
   }
 
