@@ -96,7 +96,19 @@ async function getOwnedHiredOnboarding(req, res) {
 router.get('/:application_id', asyncHandler(async (req, res) => {
   const ctx = await getOwnedHiredOnboarding(req, res);
   if (!ctx) return; // response already sent
-  return res.json(ctx.record);
+  // Salary crediting: the companies of the candidate's own business unit.
+  // Family details now live on the application (migration 008); an onboarding
+  // record from before that keeps its own copy, which wins if filled in.
+  const [companies, fam] = await Promise.all([
+    db.query('SELECT name FROM companies WHERE business_unit = $1 ORDER BY name', [ctx.app.business_unit]),
+    db.query(`SELECT spouse_name, spouse_nric, spouse_date_of_birth, spouse_working, children_below_18, children_18_to_23
+                FROM applications WHERE id = $1`, [ctx.app.id]),
+  ]);
+  return res.json({
+    ...ctx.record,
+    available_companies: companies.rows.map((c) => c.name),
+    family: fam.rows[0],
+  });
 }));
 
 // PATCH /api/onboarding/:application_id  (rpc_save_my_onboarding)
@@ -127,6 +139,9 @@ router.post('/:application_id/confirm-section', asyncHandler(async (req, res) =>
 
   const { section } = req.body || {};
   const column = SECTION_COLUMN[section];
+  // The typed digital-signature name (personal details and salary crediting).
+  const signedName = String((req.body && req.body.signed_name) || '').trim().slice(0, 200) || null;
+  const signedCol = ['personal_details', 'salary_crediting'].includes(section) ? `${section}_signed_name` : null;
   if (!column) {
     return res.status(400).json({ error: `section must be one of ${REQUIRED_SECTIONS.join(', ')}` });
   }
@@ -135,10 +150,10 @@ router.post('/:application_id/confirm-section', asyncHandler(async (req, res) =>
   const result = await db.withTransaction(async (client) => {
     const { rows } = await client.query(
       `UPDATE onboarding_records
-         SET ${column} = true, ${column}_at = now()
+         SET ${column} = true, ${column}_at = now()${signedCol ? `, ${signedCol} = COALESCE($2, ${signedCol})` : ''}
        WHERE application_id = $1
        RETURNING *`,
-      [req.params.application_id]
+      signedCol ? [req.params.application_id, signedName] : [req.params.application_id]
     );
     let updated = rows[0];
 
