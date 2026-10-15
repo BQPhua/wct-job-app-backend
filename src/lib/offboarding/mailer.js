@@ -45,12 +45,13 @@ const lastDay = (c) => c.actual_last_day || c.official_last_day;
 // ---------------------------------------------------------------------------
 // Recipients
 // ---------------------------------------------------------------------------
+// A payroll_pic grant with no business unit covers every unit.
 async function roleEmails(role, bu, departmentId = null) {
   const { rows } = await db.query(
     `SELECT DISTINCT u.email
        FROM admin_grants g
        JOIN admin_users u ON u.id = g.admin_user_id
-      WHERE g.role = $1 AND (g.business_unit = $2 OR g.role = 'payroll_pic') AND u.is_active = true
+      WHERE g.role = $1 AND (g.business_unit = $2 OR (g.role = 'payroll_pic' AND g.business_unit IS NULL)) AND u.is_active = true
         AND ($3::int IS NULL OR g.department_id = $3)
       ORDER BY u.email`,
     [role, bu, departmentId]
@@ -70,9 +71,13 @@ async function sectionRecipients(caseRow, section) {
 // ---------------------------------------------------------------------------
 // HTML
 // ---------------------------------------------------------------------------
-// Same look as the job-application emails in Power Automate (navy header,
+// One look for every email the server sends (white header with the formal logo,
 // small label, serif heading, ruled detail table, navy button, grey footer).
-// The header carries the company name as text, not the logo image.
+// The header carries the formal WCT logo (stakeholder feedback 2026-10-14).
+
+// The formal WCT logo (the one on the official application form), served by
+// the portal itself so every email client can load it.
+const logoUrl = () => `${(process.env.FRONTEND_BASE_URL || 'https://hrforms.wct.my').replace(/\/+$/, '')}/wct-logo.png`;
 
 function layout({ eyebrow, heading, intro, rows = [], button, note, area = 'Offboarding' }) {
   const label = eyebrow || area;
@@ -96,8 +101,14 @@ function layout({ eyebrow, heading, intro, rows = [], button, note, area = 'Offb
     <p style="font-size:11px;line-height:1.5;color:#6B6D70;margin:8px 0 0;">If the button doesn't work, copy this link into your browser:<br><span style="word-break:break-all;">${esc(button.href)}</span></p>` : '';
   return `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;background:#ffffff;">
 
-  <div style="background:#101B2D;padding:20px 28px;">
-    <p style="margin:0;font-family:Georgia,serif;font-size:18px;font-weight:bold;letter-spacing:.04em;color:#ffffff;">WCT Group</p>
+  <div style="background:#ffffff;padding:18px 28px;border-bottom:3px solid #D7141A;">
+    <table cellpadding="0" cellspacing="0"><tbody><tr>
+      <td style="vertical-align:middle;padding-right:14px;"><img src="${esc(logoUrl())}" alt="WCT" width="72" style="display:block;width:72px;height:auto;border:0;"></td>
+      <td style="vertical-align:middle;">
+        <p style="margin:0;font-family:Georgia,serif;font-size:17px;font-weight:bold;color:#101B2D;">WCT Group of Companies</p>
+        <p style="margin:2px 0 0;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:#6B6D70;">Building Values</p>
+      </td>
+    </tr></tbody></table>
   </div>
 
   <div style="padding:28px;color:#1A1A1A;">
@@ -108,8 +119,9 @@ function layout({ eyebrow, heading, intro, rows = [], button, note, area = 'Offb
     ${note ? `<p style="font-size:13px;line-height:1.6;color:#6B6D70;margin:16px 0 0;">${note}</p>` : ''}
   </div>
 
-  <div style="padding:16px 28px;background:#F6F6F5;border-top:1px solid #E5E5E4;">
-    <p style="font-size:11px;color:#6B6D70;margin:0;">This is an automated notification from the WCT Group Employment Application Portal. Please do not reply directly to this email.</p>
+  <div style="padding:18px 28px;background:#F6F6F5;border-top:1px solid #E5E5E4;">
+    <p style="font-size:14px;line-height:1.5;font-weight:bold;color:#101B2D;margin:0;">This is an automated email from the WCT Employment Application Portal &mdash; please do not reply to this email.</p>
+    <p style="font-size:12.5px;line-height:1.5;color:#6B6D70;margin:6px 0 0;">For enquiries, please contact your HR Representative.</p>
   </div>
 
 </div>`;
