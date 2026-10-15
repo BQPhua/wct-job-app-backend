@@ -14,15 +14,20 @@
 //   unit_scope 'SUPERIOR'  immediate superior with no grant — may only work
 //                          on Reporting Unit sections assigned to their email
 //
-// Payroll PIC is group-wide: one Payroll team serves every business unit, so
-// a payroll_pic grant carries no business unit and, in any session, lets the
-// holder see every case and mark payroll done for every BU.
+// Payroll PIC (stakeholder feedback, 14 Oct 2026): granted per business unit,
+// or with no business unit for "all business units". A per-unit Payroll PIC
+// works only on that unit's cases; an all-units one (roles.payroll_all) sees
+// and pays out every unit's cases in any session.
+//
+// Clearance PIC is no longer granted (not part of WCT's process); HR clears
+// the department sections. Grants made earlier still work as before.
 // ============================================================================
 
 const db = require('../../db');
 
 const ALL_DEPARTMENT_IDS = [1, 2, 3, 4, 5, 6];
 const EMPTY_ROLES = Object.freeze({ bu_admin: false, payroll_pic: false, clearance_department_ids: [] });
+const newRoles = () => ({ bu_admin: false, payroll_pic: false, clearance_department_ids: [] });
 
 /**
  * Everything an email is entitled to, straight from the database.
@@ -47,18 +52,19 @@ async function resolveAdminGrants(email) {
 
   const byBu = {};
   for (const g of grants) {
-    // payroll_pic is group-wide (see header), so it adds no BU choice. Older
-    // grants that still name a BU are read the same way.
-    if (!['bu_admin', 'clearance_pic'].includes(g.role) || !g.business_unit) continue;
-    const r = byBu[g.business_unit] || (byBu[g.business_unit] = { bu_admin: false, payroll_pic: false, clearance_department_ids: [] });
+    // Every role that names a business unit makes that unit a choice. A
+    // payroll_pic grant without one is "all business units" (isPayroll).
+    if (!['bu_admin', 'clearance_pic', 'payroll_pic'].includes(g.role) || !g.business_unit) continue;
+    const r = byBu[g.business_unit] || (byBu[g.business_unit] = newRoles());
     if (g.role === 'bu_admin') r.bu_admin = true;
+    if (g.role === 'payroll_pic') r.payroll_pic = true;
     if (g.role === 'clearance_pic' && !r.clearance_department_ids.includes(g.department_id)) {
       r.clearance_department_ids.push(g.department_id);
     }
   }
   Object.values(byBu).forEach((r) => r.clearance_department_ids.sort((a, b) => a - b));
-  const isPayroll = grants.some((g) => g.role === 'payroll_pic');
-  Object.values(byBu).forEach((r) => { r.payroll_pic = isPayroll; });
+  const isPayroll = grants.some((g) => g.role === 'payroll_pic' && !g.business_unit);
+  if (isPayroll) Object.values(byBu).forEach((r) => { r.payroll_pic = true; r.payroll_all = true; });
 
   const sup = await db.query(
     `SELECT count(*)::int AS n
@@ -83,24 +89,27 @@ async function resolveAdminGrants(email) {
 /** Roles a verified JWT payload stands for (tolerates pre-roles tokens). */
 function rolesFromClaims(payload) {
   if (payload.unit_scope === 'ALL') {
-    return { bu_admin: true, payroll_pic: true, clearance_department_ids: ALL_DEPARTMENT_IDS.slice() };
+    return { bu_admin: true, payroll_pic: true, payroll_all: true, clearance_department_ids: ALL_DEPARTMENT_IDS.slice() };
   }
   if (payload.unit_scope === 'SUPERIOR') return { ...EMPTY_ROLES, clearance_department_ids: [] };
   if (payload.roles) {
-    return {
+    const r = {
       bu_admin: !!payload.roles.bu_admin,
       payroll_pic: !!payload.roles.payroll_pic,
       clearance_department_ids: Array.isArray(payload.roles.clearance_department_ids)
         ? payload.roles.clearance_department_ids.map(Number) : [],
     };
+    // Only present when true: payroll for every business unit.
+    if (payload.roles.payroll_all || payload.unit_scope === 'GROUP') r.payroll_all = true;
+    return r;
   }
   // Token minted before PIC roles existed: those were always bu_admin sessions.
   return { bu_admin: true, payroll_pic: false, clearance_department_ids: [] };
 }
 
 const isSuper = (admin) => admin.unitScope === 'ALL';
-/** Payroll PIC — group-wide, whatever BU the session was opened for. */
-const isGroupPayroll = (admin) => admin.unitScope !== 'SUPERIOR' && !!(admin.roles && admin.roles.payroll_pic);
+/** Payroll PIC for every business unit, whatever unit the session is for. */
+const isGroupPayroll = (admin) => admin.unitScope !== 'SUPERIOR' && !!(admin.roles && admin.roles.payroll_pic && admin.roles.payroll_all);
 /** Sessions that read across every business unit. */
 const seesAllUnits = (admin) => isSuper(admin) || isGroupPayroll(admin);
 const isHr = (admin) => isSuper(admin) || !!(admin.roles && admin.roles.bu_admin);
@@ -116,7 +125,7 @@ const DEPARTMENT_NAMES = { 1: 'Reporting Unit', 2: 'IT', 3: 'Administration', 4:
 function formatRoleLabel(role, businessUnit, departmentId) {
   if (role === 'super_admin') return 'Super Admin';
   if (role === 'bu_admin') return `BU Admin (${businessUnit || 'unassigned'})`;
-  if (role === 'payroll_pic') return 'Payroll PIC (all business units)';
+  if (role === 'payroll_pic') return businessUnit ? `Payroll PIC (${businessUnit})` : 'Payroll PIC (all business units)';
   if (role === 'clearance_pic') return `Clearance PIC — ${DEPARTMENT_NAMES[departmentId] || 'Department'} (${businessUnit})`;
   return role || '';
 }
@@ -130,8 +139,9 @@ const inBu = (admin, bu) => isSuper(admin) || admin.unitScope === bu;
 
 /** HR (bu_admin) for this BU, or super admin. */
 const isHrFor = (admin, bu) => isSuper(admin) || (admin.unitScope === bu && !!admin.roles.bu_admin);
-/** Payroll PIC (group-wide, so any BU) or super admin. */
-const isPayrollFor = (admin, _bu) => isSuper(admin) || isGroupPayroll(admin);
+/** Super admin, an all-units Payroll PIC, or this unit's Payroll PIC. */
+const isPayrollFor = (admin, bu) => isSuper(admin) || isGroupPayroll(admin)
+  || (admin.unitScope === bu && !!(admin.roles && admin.roles.payroll_pic));
 
 /**
  * SQL predicate (for a WHERE clause on offboarding_cases aliased `alias`)
@@ -139,8 +149,8 @@ const isPayrollFor = (admin, _bu) => isSuper(admin) || isGroupPayroll(admin);
  * $startIndex; returns { sql, values }.
  *
  *  - super admin: everything
- *  - payroll PIC: every case (group-wide)
- *  - HR: every case in their BU
+ *  - all-units payroll PIC: every case
+ *  - HR or the unit's payroll PIC: every case in their BU
  *  - clearance PIC: cases in their BU that have a section of their department
  *  - anyone: cases whose Reporting Unit section is assigned to their email
  */
@@ -156,7 +166,7 @@ function caseScopeSql(admin, alias = 'c', startIndex = 1) {
   }
   if (admin.unitScope !== 'SUPERIOR') {
     const r = admin.roles || {};
-    if (r.bu_admin) {
+    if (r.bu_admin || r.payroll_pic) {
       parts.push(`${alias}.business_unit = ${p(admin.unitScope)}`);
     } else if (r.clearance_department_ids && r.clearance_department_ids.length) {
       parts.push(`(${alias}.business_unit = ${p(admin.unitScope)} AND EXISTS (
@@ -175,7 +185,7 @@ function canViewCase(admin, caseRow, sections = []) {
   if (email && sections.some((s) => lc(s.assignee_email) === email)) return true;
   if (admin.unitScope === 'SUPERIOR' || admin.unitScope !== caseRow.business_unit) return false;
   const r = admin.roles || {};
-  if (r.bu_admin) return true;
+  if (r.bu_admin || r.payroll_pic) return true;
   const depts = r.clearance_department_ids || [];
   return sections.some((s) => depts.includes(s.department_id));
 }
