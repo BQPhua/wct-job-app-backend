@@ -34,7 +34,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // A malformed case id can only ever be "not found" (never a raw Postgres error).
 router.param('id', (req, res, next, id) => (UUID_RE.test(id) ? next() : res.status(404).json({ error: 'Case not found' })));
 
-const BUSINESS_UNITS = ['E&C', 'Land', 'Mall'];
+const businessUnits = require('../lib/businessUnits');
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const lc = (v) => (v == null ? '' : String(v).trim().toLowerCase());
 const clean = (v) => { if (v == null) return null; const s = String(v).trim(); return s === '' ? null : s; };
@@ -158,13 +158,15 @@ async function afterCommitEmail(caseId, actor, eventType, extra = {}) {
 router.get('/meta', handle(async (req, res) => {
   const a = req.admin;
   const all = access.seesAllUnits(a);
-  const [depts, companies] = await Promise.all([
+  const [depts, companies, units] = await Promise.all([
     db.query('SELECT id, name, is_reporting_unit FROM clearance_departments ORDER BY display_order'),
     db.query(
       `SELECT name, business_unit FROM companies ${all ? '' : 'WHERE business_unit = $1'} ORDER BY name`,
       all ? [] : [a.unitScope]
     ),
+    businessUnits.list(),
   ]);
+  const codes = units.map((u) => u.code);
   res.json({
     departments: depts.rows,
     reasons: EXIT_REASONS,
@@ -174,7 +176,8 @@ router.get('/meta', handle(async (req, res) => {
     email: a.email,
     is_hr: access.isHr(a),
     all_units: all,
-    business_units: all ? BUSINESS_UNITS : (BUSINESS_UNITS.includes(a.unitScope) ? [a.unitScope] : []),
+    business_units: all ? units.filter((u) => u.is_active).map((u) => u.code) : (codes.includes(a.unitScope) ? [a.unitScope] : []),
+    business_unit_names: Object.fromEntries(units.map((u) => [u.code, u.name])),
     companies: a.unitScope === 'SUPERIOR' ? [] : companies.rows,
     today: dates.todayMYT(),
   });
@@ -241,7 +244,8 @@ function mineSql(a, push) {
                     AND sm.department_id = ANY(${push(depts)}::int[]) AND c.business_unit = ${push(a.unitScope)})`);
     }
     if (a.roles.payroll_pic) {
-      parts.push("c.status = 'pending_payroll'"); // payroll is group-wide
+      parts.push(access.isGroupPayroll(a) ? "c.status = 'pending_payroll'"
+        : `(c.status = 'pending_payroll' AND c.business_unit = ${push(a.unitScope)})`);
     }
   }
   if (email) {
@@ -262,7 +266,7 @@ function buildListQuery(req) {
   const where = [scope.sql];
   const today = dates.todayMYT();
 
-  if (access.seesAllUnits(a) && BUSINESS_UNITS.includes(q.business_unit)) where.push(`c.business_unit = ${push(q.business_unit)}`);
+  if (access.seesAllUnits(a) && typeof q.business_unit === 'string' && q.business_unit) where.push(`c.business_unit = ${push(q.business_unit)}`);
   // The summary tiles count everything in scope (+ super admin BU filter),
   // ignoring the other filters, so they only use the placeholders so far.
   const scopeWhere = [...where];
@@ -435,7 +439,7 @@ router.post('/cases', handle(async (req, res) => {
   const email = lc(body.employee_email);
   if (!EMAIL_RE.test(email)) fail(400, 'A valid employee email is required');
   const bu = access.isSuper(req.admin) ? body.business_unit : (body.business_unit || req.admin.unitScope);
-  if (!BUSINESS_UNITS.includes(bu)) fail(400, 'Business unit is required');
+  if (!bu || !(await businessUnits.isValid(bu))) fail(400, 'Business unit is required');
   if (!access.isHrFor(req.admin, bu)) fail(403, 'You can only invite people in your own business unit');
   const details = validateDetails(body, { creating: true });
   checkLastDays(details.official_last_day, details.actual_last_day);
@@ -808,7 +812,7 @@ router.get('/analytics', handle(async (req, res) => {
   let scope = 'ALL';
   if (access.isSuper(a)) {
     if (req.query.business_unit) {
-      if (!BUSINESS_UNITS.includes(req.query.business_unit)) fail(400, 'Unknown business unit');
+      if (!(await businessUnits.isValid(req.query.business_unit))) fail(400, 'Unknown business unit');
       scope = req.query.business_unit;
       where.push(`c.business_unit = ${push(scope)}`);
     }
@@ -839,8 +843,9 @@ router.get('/analytics', handle(async (req, res) => {
          FROM base`),
     access.isSuper(a) && scope === 'ALL'
       ? q(`SELECT u.bu AS business_unit, count(b.id)::int AS count
-             FROM unnest(ARRAY['E&C','Land','Mall']) AS u(bu) LEFT JOIN base b ON b.business_unit = u.bu
-            GROUP BY u.bu ORDER BY u.bu`)
+             FROM business_units u0 CROSS JOIN LATERAL (SELECT u0.code AS bu) u LEFT JOIN base b ON b.business_unit = u.bu
+            WHERE u0.is_active OR b.id IS NOT NULL
+            GROUP BY u.bu, u0.sort_order ORDER BY u0.sort_order`)
       : Promise.resolve(null),
     q(`SELECT to_char(last_day, 'YYYY-MM') AS month, count(*)::int AS count
          FROM left_ WHERE last_day IS NOT NULL GROUP BY 1 ORDER BY 1`),
@@ -953,8 +958,9 @@ router.get('/my-tasks', handle(async (req, res) => {
       `SELECT id, ref_no, employee_name, business_unit, position, acknowledged_at,
               COALESCE(actual_last_day, official_last_day) AS last_day
          FROM offboarding_cases
-        WHERE status = 'pending_payroll'
-        ORDER BY acknowledged_at NULLS LAST`
+        WHERE status = 'pending_payroll' AND ($1::text IS NULL OR business_unit = $1)
+        ORDER BY acknowledged_at NULLS LAST`,
+      [access.isGroupPayroll(a) ? null : a.unitScope]
     );
   }
   const withDays = (r) => ({ ...r, days_left: r.last_day ? dates.daysBetween(today, r.last_day) : null });
