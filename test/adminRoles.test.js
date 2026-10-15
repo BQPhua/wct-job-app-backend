@@ -105,35 +105,31 @@ test('super admin session and legacy BU tokens keep full job-app access', async 
   assert.equal(ok2.status, 200);
 });
 
-test('granting PIC roles validates department and labels the notification', async () => {
+test('granting roles: payroll per unit or all units; clearance PIC refused', async () => {
   const pa = await require('./helpers/paStub').start(['POWER_AUTOMATE_URL_ADMIN_ACTIVE']);
   const boss = await session('boss@wct.my');
   const auth = { Authorization: `Bearer ${boss.body.token}` };
   const target = await db().query("SELECT id FROM admin_users WHERE email = 'target@wct.my'");
   const url = `/api/admin/admins/${target.rows[0].id}/grants`;
 
-  const noDept = await request().post(url).set(auth).send({ role: 'clearance_pic', business_unit: 'Land' });
-  assert.equal(noDept.status, 400);
-  const badDept = await request().post(url).set(auth).send({ role: 'clearance_pic', business_unit: 'Land', department_id: 99 });
-  assert.equal(badDept.status, 400);
-  const ru = await request().post(url).set(auth).send({ role: 'clearance_pic', business_unit: 'Land', department_id: 1 });
-  assert.equal(ru.status, 400);
-  assert.match(ru.body.error, /immediate superior/i);
-  const ok = await request().post(url).set(auth).send({ role: 'clearance_pic', business_unit: 'Land', department_id: 2 });
-  assert.equal(ok.status, 201);
+  // Clearance PIC is no longer part of WCT's process (stakeholder feedback 2026-10-14).
+  const clearance = await request().post(url).set(auth).send({ role: 'clearance_pic', business_unit: 'Land', department_id: 2 });
+  assert.equal(clearance.status, 400);
+  assert.match(clearance.body.error, /no longer used/i);
   const payroll = await request().post(url).set(auth).send({ role: 'payroll_pic', business_unit: 'Mall' });
   assert.equal(payroll.status, 201);
+  assert.equal(payroll.body.business_unit, 'Mall');
   const dup = await request().post(url).set(auth).send({ role: 'payroll_pic', business_unit: 'Mall' });
   assert.equal(dup.status, 409);
+  const everyUnit = await request().post(url).set(auth).send({ role: 'payroll_pic' });
+  assert.equal(everyUnit.status, 201);
+  assert.equal(everyUnit.body.business_unit, null);
+  const badBu = await request().post(url).set(auth).send({ role: 'bu_admin', business_unit: 'Nowhere' });
+  assert.equal(badBu.status, 400);
 
   await new Promise((r) => setTimeout(r, 50));
   const labels = pa.calls.map((c) => c.body.role_label);
-  assert.ok(labels.includes('Clearance PIC — IT (Land)'), labels.join(' | '));
-  assert.ok(labels.includes('Payroll PIC (Mall)'));
-
-  const list = await request().get('/api/admin/admins').set(auth);
-  const row = list.body.find((r) => r.email === 'target@wct.my' && r.role === 'clearance_pic');
-  assert.equal(row.department_id, 2);
-  assert.equal(row.department_name, 'IT');
+  assert.ok(labels.includes('Payroll PIC (Mall)'), labels.join(' | '));
+  assert.ok(labels.includes('Payroll PIC (all business units)'));
   await pa.stop();
 });
