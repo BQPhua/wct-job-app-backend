@@ -14,7 +14,7 @@ const HR_LAND = `Bearer ${fx.adminToken({ email: 'hr.land@wct.my', unit_scope: '
 let pa;
 before(async () => {
   await resetDb();
-  pa = await paStub.start(['POWER_AUTOMATE_URL_SUBMIT', 'POWER_AUTOMATE_URL_OFFBOARDING_EMAIL']);
+  pa = await paStub.start(['POWER_AUTOMATE_URL_SUBMIT', 'POWER_AUTOMATE_URL_OFFBOARDING_EMAIL', 'POWER_AUTOMATE_URL_STATUS_CHANGE', 'POWER_AUTOMATE_URL_BU_TRANSFER']);
   await fx.admin({ email: 'boss@wct.my', grants: [{ role: 'super_admin' }] });
   await fx.admin({ email: 'hr.land@wct.my', grants: [{ role: 'bu_admin', business_unit: 'Land' }] });
 });
@@ -118,5 +118,20 @@ describe('Business Unit Settings (super admin)', () => {
     assert.equal(res.status, 200);
     assert.equal(res.body.business_unit, 'Hotels');
     assert.equal((await api('patch', `/applications/${a.id}`, SUPER, { business_unit: 'Nope' })).status, 400);
+    await new Promise((r) => setTimeout(r, 100));
+    const transfer = pa.calls.find((c) => c.url.includes('POWER_AUTOMATE_URL_BU_TRANSFER'));
+    assert.ok(transfer, 'transfer webhook fired');
+    assert.equal(transfer.body.business_unit_name, 'Hotels');
+    assert.equal(transfer.body.from_business_unit_name, 'Property Development');
+  });
+  test('status-change notifications carry the unit display name', async () => {
+    const a = await fx.hiredApplication({ email: 'status.name@wct.my', business_unit: 'Land' });
+    await db().query("UPDATE applications SET status = 'submitted' WHERE id = $1", [a.id]);
+    const res = await api('post', `/applications/${a.id}/status`, SUPER, { status: 'shortlisted' });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    await new Promise((r) => setTimeout(r, 100));
+    const call = pa.calls.find((c) => c.url.includes('POWER_AUTOMATE_URL_STATUS_CHANGE'));
+    assert.ok(call, 'status webhook fired');
+    assert.equal(call.body.business_unit_name, 'Property Development');
   });
 });
