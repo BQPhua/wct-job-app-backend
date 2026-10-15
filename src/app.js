@@ -39,6 +39,15 @@ const { requireAdminAuth } = require('./middleware/auth');
 app.use(liveEvents.trackChanges);
 app.get('/api/admin/events', requireAdminAuth, liveEvents.stream);
 
+// ---- Business units (public: candidate links and pickers) ----
+// Only what a candidate page needs; PIC emails stay admin-only.
+app.get('/api/business-units', async (req, res, next) => {
+  try {
+    const units = await require('./lib/businessUnits').list({ activeOnly: true });
+    res.json(units.map((u) => ({ code: u.code, name: u.name, ref_code: u.ref_code })));
+  } catch (err) { next(err); }
+});
+
 // ---- Candidate auth (public) ----
 app.use('/api/auth', authRoutes);
 
