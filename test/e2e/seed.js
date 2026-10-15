@@ -15,7 +15,7 @@ const { addDays, todayMYT } = require('../../src/lib/offboarding/dates');
   await fx.admin({ email: 'boss@wct.my', name: 'Super Boss', grants: [{ role: 'super_admin' }] });
   await fx.admin({ email: 'hr.land@wct.my', name: 'Nur HR', grants: [{ role: 'bu_admin', business_unit: 'Land' }] });
   await fx.admin({ email: 'it.land@wct.my', name: 'Ali IT', grants: [{ role: 'clearance_pic', business_unit: 'Land', department_id: 2 }] });
-  await fx.admin({ email: 'pay.land@wct.my', name: 'Pay Roll', grants: [{ role: 'payroll_pic', business_unit: 'Land' }] });
+  await fx.admin({ email: 'pay.land@wct.my', name: 'Pay Roll', grants: [{ role: 'payroll_pic' }] });
   await db().query("INSERT INTO companies (name, category, business_unit) VALUES ('WCT Land Sdn Bhd','Property','Land'), ('WCT Construction Sdn Bhd','E&C','E&C')");
   const hired = await fx.hiredApplication({ email: 'aina.ali@wct.my', business_unit: 'Land', name: 'Aina Binti Ali', position: 'Site Engineer' });
   const employee = await db().query('SELECT id FROM users WHERE email = $1', ['aina.ali@wct.my']);
