@@ -22,7 +22,8 @@ const db = require('../db');
 const mailer = require('./offboarding/mailer');
 const lifecycle = require('./offboarding/lifecycle');
 const dates = require('./offboarding/dates');
-const { sendOffboardingEmail } = require('./powerAutomate');
+const { simpleEmail, sendOnboardingReminder } = require('./candidateEmails');
+const businessUnits = require('./businessUnits');
 const { getBuAdminEmails } = require('./notificationHelpers');
 
 const STEPS = {
@@ -87,20 +88,9 @@ async function offboardingFollowUps(today, stats) {
   }
 }
 
-function simpleEmail({ area, eyebrow, to, cc = [], subject, heading, intro, rows = [], button, note, eventType, ref }) {
-  return sendOffboardingEmail({
-    to: [...new Set(to)].join(';'),
-    cc: [...new Set(cc)].filter((e) => !to.includes(e)).join(';'),
-    subject: `[WCT ${area}] ${subject}`,
-    html: mailer.layout({ eyebrow, heading, intro, rows, button, note, area }),
-    attachments: [],
-    event_type: eventType,
-    case_ref: ref || '',
-  });
-}
-
 async function onboardingFollowUps(today, stats) {
   const kind = 'onboarding_reminder';
+  const names = await businessUnits.nameMap();
   const { rows } = await db.query(
     `SELECT a.id, a.reference_no, a.name_nric, a.email, a.business_unit, a.position_applying, a.updated_at
        FROM applications a
@@ -125,19 +115,12 @@ async function onboardingFollowUps(today, stats) {
     const step = dueStep(kind, age, done);
     if (step == null) continue;
     // eslint-disable-next-line no-await-in-loop
-    const r = await simpleEmail({
-      area: 'Onboarding',
-      eyebrow: 'Onboarding Reminder',
-      to: [a.email],
-      subject: `Reminder: please complete your onboarding details (${a.reference_no})`,
-      heading: 'Your onboarding details are still needed',
-      intro: `Dear ${mailer.esc(a.name_nric || 'candidate')},<br><br>Congratulations again on joining WCT. Your onboarding details (statutory, bank, family, emergency contacts and beneficiary) haven't been completed yet. HR needs them before your first payroll.`,
-      rows: [['Reference', a.reference_no], ['Position', a.position_applying || '—'], ['Business unit', a.business_unit]],
-      button: { label: 'Complete my onboarding', href: `${frontend()}/index.html?onboarding=${encodeURIComponent(a.id)}` },
-      note: 'You can save your progress and come back any time. If you have already sent these details to HR, please ignore this email.',
-      eventType: kind,
-      ref: a.reference_no,
-    });
+    // HR already chased this person by hand today (Send reminder button).
+    const manualToday = await db.query( // eslint-disable-line no-await-in-loop
+      `SELECT 1 FROM notification_log WHERE kind = 'onboarding_reminder_manual' AND ref_key = $1
+          AND (sent_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date = $2::date`, [String(a.id), today]);
+    if (manualToday.rows.length) continue;
+    const r = await sendOnboardingReminder(a, names[a.business_unit]); // eslint-disable-line no-await-in-loop
     if (r.ok) {
       for (const d of STEPS[kind].filter((x) => x <= step)) await markSent(kind, a.id, d); // eslint-disable-line no-await-in-loop
       stats.sent += 1;
