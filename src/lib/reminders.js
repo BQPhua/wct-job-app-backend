@@ -183,6 +183,13 @@ async function runFollowUps(today = dates.todayMYT()) {
     await db.query('SELECT 1 FROM notification_log LIMIT 1');
   } catch (err) {
     if (err.code === '42P01') return { ...stats, skipped: 'notification_log table missing — run migration 007' };
+    if (err.code === '42501') {
+      // The table exists but the app's database login can't use it (it was
+      // created by a different login). Fix: scripts/fix-db-permissions.sh
+      // eslint-disable-next-line no-console
+      console.error('reminders: no permission on notification_log — run scripts/fix-db-permissions.sh on the server');
+      return { ...stats, skipped: 'no permission on notification_log — run scripts/fix-db-permissions.sh' };
+    }
     throw err;
   }
   for (const [name, fn] of [['offboarding', offboardingFollowUps], ['onboarding', onboardingFollowUps], ['hr_digest', hrDigest]]) {
