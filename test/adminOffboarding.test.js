@@ -80,7 +80,7 @@ describe('meta and prefill', () => {
     assert.deepEqual(res.body.roles.clearance_department_ids, [2]);
     assert.deepEqual(res.body.business_units, ['Land']);
     const s = await api('get', '/meta', SUPER);
-    assert.deepEqual(s.body.business_units, ['E&C', 'Land', 'Mall', 'REIT', 'Aviation', 'F&B', 'Hotels']);
+    assert.deepEqual(s.body.business_units, ['E&C', 'Land', 'Mall', 'Aviation', 'F&B', 'Hotels']);
   });
 
   test('prefill finds the hired application in scope', async () => {
