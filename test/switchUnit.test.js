@@ -34,7 +34,7 @@ test('/auth/microsoft lists the units with names and roles for the picker', asyn
   ]);
   const boss = await request().post('/api/admin/auth/microsoft').send({ id_token: 'boss@wct.my' });
   assert.equal(boss.body.units[0].code, 'ALL');
-  assert.equal(boss.body.units.length, 8, 'super admin: All + every active unit');
+  assert.equal(boss.body.units.length, 7, 'super admin: All + every active unit (REIT merged into Malls)');
 });
 
 test('a per-unit payroll session only carries payroll for that unit', async () => {
