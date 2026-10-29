@@ -28,8 +28,7 @@ describe('public list', () => {
     const byCode = Object.fromEntries(res.body.map((u) => [u.code, u.name]));
     assert.equal(byCode.Land, 'Property Development');
     assert.equal(byCode.Mall, 'Malls Management');
-    assert.deepEqual(Object.keys(byCode), ['E&C', 'Land', 'Mall', 'Aviation', 'F&B', 'Hotels']);
-    assert.deepEqual(res.body.find((u) => u.code === 'Mall').aliases, ['REIT', 'REIT'], 'REIT merged into Malls (migration 009)');
+    assert.deepEqual(Object.keys(byCode), ['E&C', 'Land', 'Mall', 'REIT', 'Aviation', 'F&B', 'Hotels']);
     assert.equal(res.body[0].pic_email, undefined, 'PIC emails are not public');
   });
 });
@@ -41,7 +40,7 @@ describe('candidate drafts', () => {
   const year = new Date().getUTCFullYear();
 
   test('new units get their own reference prefix', async () => {
-    for (const [bu, prefix] of [['Aviation', 'AV'], ['F&B', 'FNB'], ['Hotels', 'HTL'], ['Land', 'LAND']]) {
+    for (const [bu, prefix] of [['REIT', 'REIT'], ['Aviation', 'AV'], ['F&B', 'FNB'], ['Hotels', 'HTL'], ['Land', 'LAND']]) {
       const res = await draft(bu);
       assert.equal(res.status, 201, JSON.stringify(res.body));
       assert.equal(res.body.reference_no, `WCT-${prefix}-${year}-000001`);
@@ -55,9 +54,9 @@ describe('candidate drafts', () => {
   });
   test('unknown and inactive units are refused', async () => {
     assert.equal((await draft('Bogus')).status, 400);
-    await db().query("UPDATE business_units SET is_active = false WHERE code = 'Aviation'");
-    assert.equal((await draft('Aviation')).status, 400);
-    await db().query("UPDATE business_units SET is_active = true WHERE code = 'Aviation'");
+    await db().query("UPDATE business_units SET is_active = false WHERE code = 'REIT'");
+    assert.equal((await draft('REIT')).status, 400);
+    await db().query("UPDATE business_units SET is_active = true WHERE code = 'REIT'");
   });
   test('submitting notifies the unit HR admins and its PIC email', async () => {
     await db().query("UPDATE business_units SET pic_email = 'pic.land@wct.my' WHERE code = 'Land'");
@@ -108,9 +107,9 @@ describe('Business Unit Settings (super admin)', () => {
     assert.equal(list.body.find((c) => c.name === 'New Hotel Sdn Bhd').business_unit, 'Hotels');
     assert.equal((await api('post', '/companies', HR_LAND, { name: 'X', business_unit: 'Hotels' })).status, 403);
     const id = list.body.find((c) => c.name === 'New Hotel Sdn Bhd').id;
-    const moved = await api('patch', `/companies/${id}`, SUPER, { business_unit: 'Aviation' });
+    const moved = await api('patch', `/companies/${id}`, SUPER, { business_unit: 'REIT' });
     assert.equal(moved.status, 200);
-    assert.equal(moved.body.business_unit, 'Aviation');
+    assert.equal(moved.body.business_unit, 'REIT');
     assert.equal((await api('patch', `/companies/${id}`, SUPER, { business_unit: 'Nope' })).status, 400);
   });
   test('super admin can move an application to a new unit', async () => {
