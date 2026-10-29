@@ -11,7 +11,7 @@
 
 const db = require('../db');
 
-const COLUMNS = 'code, name, ref_code, pic_email, sort_order, is_active';
+const COLUMNS = 'code, name, ref_code, pic_email, sort_order, is_active, merged_into';
 
 /** Every unit, ordered for display. */
 async function list({ activeOnly = false, client = db } = {}) {
@@ -44,7 +44,23 @@ async function resolve(input) {
     `SELECT ${COLUMNS} FROM business_units WHERE lower(code) = $1 OR lower(name) = $1 ORDER BY (lower(code) = $1) DESC LIMIT 1`,
     [v]
   );
-  return rows[0] || null;
+  const unit = rows[0] || null;
+  // A unit merged into another (REIT -> Mall, migration 009): old links
+  // open the unit it was merged into.
+  if (unit && unit.merged_into && unit.merged_into !== unit.code) return (await get(unit.merged_into)) || unit;
+  return unit;
+}
+
+/**
+ * Active units for candidate pages, each with the codes/names of units that
+ * were merged into it (`aliases`), so old ?bu= links still resolve.
+ */
+async function publicList() {
+  const all = await list();
+  return all.filter((u) => u.is_active).map((u) => ({
+    code: u.code, name: u.name, ref_code: u.ref_code,
+    aliases: all.filter((m) => m.merged_into === u.code).flatMap((m) => [m.code, m.name]),
+  }));
 }
 
 /** code -> display name, for labels in emails and exports. */
@@ -53,4 +69,4 @@ async function nameMap() {
   return Object.fromEntries(rows.map((r) => [r.code, r.name]));
 }
 
-module.exports = { list, get, isValid, resolve, nameMap };
+module.exports = { list, get, isValid, resolve, publicList, nameMap };
