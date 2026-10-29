@@ -16,19 +16,13 @@
 // the reference app's OAuth accounts did) and then call the exact same
 // `issueToken` helper as the password flow.
 //
-// Password reset: the reference app used Supabase's built-in magic-link
-// email flow. Actually sending email (spec §9.4 "notification emails... not
-// present in this client-only repo") is out of scope for this pass — the
-// request endpoint below issues a short-lived reset token and logs it
-// server-side (TODO: wire to Azure Communication Services / SendGrid) so the
-// two-endpoint shape (request -> confirm) is already correct for when
-// real email delivery is added.
+// Password reset: the request endpoint emails a one-hour link through the
+// generic Power Automate email flow; see "Forgot password" below.
 // ============================================================================
 
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const asyncHandler = require('../lib/asyncHandler');
 const { verifyGoogleIdToken, verifyMicrosoftIdToken } = require('../lib/oauthVerify');
@@ -112,6 +106,10 @@ router.post('/login', asyncHandler(async (req, res) => {
   }
 
   const user = rows[0];
+  if (!user.password_hash) {
+    // Signed up with Google or Microsoft: there is no password to check.
+    return res.status(401).json({ error: 'This account signs in with Google or Microsoft. Use that button, or choose "Forgot password?" to set a password.' });
+  }
   const ok = await bcrypt.compare(password, user.password_hash);
   if (!ok) {
     return res.status(401).json({ error: 'Invalid email or password' });
@@ -236,12 +234,20 @@ router.post('/oauth/microsoft', asyncHandler(async (req, res) => {
   return handleOAuthSignIn(res, identity, 'microsoft');
 }));
 
-// In-memory reset-token store as a placeholder until real email delivery
-// exists. NOTE: this does not survive a process restart / multi-instance
-// deployment — acceptable only because actual email sending (the thing that
-// would make this reachable by a real user) is itself still a TODO. Replace
-// with a `password_reset_tokens` table once email delivery is wired up.
-const resetTokens = new Map(); // token -> { userId, expiresAt }
+// ----------------------------------------------------------------------------
+// Forgot password (stakeholder feedback, 30 Oct 2026: the reset email never
+// arrived because it was never sent). The request emails a one-hour link
+// (reset-password.html?token=...) through the generic email flow; only a
+// hash of the token is stored (password_reset_tokens, migration 010), so the
+// link survives a restart and a database leak doesn't reveal live links.
+// ----------------------------------------------------------------------------
+const crypto = require('crypto');
+const { simpleEmail } = require('../lib/candidateEmails');
+
+const RESET_TTL_MS = 60 * 60 * 1000;
+const RESET_RESEND_GAP_S = 60; // at most one email a minute per account
+const hashToken = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+const frontendBase = () => (process.env.FRONTEND_BASE_URL || 'https://hrforms.wct.my').replace(/\/+$/, '');
 
 // POST /api/auth/reset-password/request
 router.post('/reset-password/request', asyncHandler(async (req, res) => {
@@ -249,41 +255,70 @@ router.post('/reset-password/request', asyncHandler(async (req, res) => {
   if (!isValidEmail(email)) {
     return res.status(400).json({ error: 'A valid email is required' });
   }
+  // Same answer whether or not the account exists, so this can't be used to
+  // find out who has an account.
+  const done = () => res.json({ ok: true });
 
-  const { rows } = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
-  // Always respond 200 regardless of whether the account exists, to avoid
-  // leaking account existence via response differences.
-  if (rows.length > 0) {
-    const token = uuidv4();
-    resetTokens.set(token, { userId: rows[0].id, expiresAt: Date.now() + 60 * 60 * 1000 });
-    // TODO: send `token` to the user via Azure Communication Services /
-    // SendGrid instead of only logging it. Logged here purely so the flow is
-    // exercisable in this pass without live email delivery.
+  const { rows } = await db.query('SELECT id, email, full_name FROM users WHERE email = $1', [email.toLowerCase()]);
+  if (!rows.length) return done();
+  const user = rows[0];
+
+  try {
+    const recent = await db.query(
+      `SELECT 1 FROM password_reset_tokens WHERE user_id = $1 AND created_at > now() - make_interval(secs => $2)`,
+      [user.id, RESET_RESEND_GAP_S]
+    );
+    if (recent.rows.length) return done();
+    const token = crypto.randomBytes(32).toString('base64url');
+    await db.query('DELETE FROM password_reset_tokens WHERE user_id = $1 AND (used_at IS NOT NULL OR expires_at < now())', [user.id]);
+    await db.query('INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, $3)',
+      [hashToken(token), user.id, new Date(Date.now() + RESET_TTL_MS)]);
+    const sent = await simpleEmail({
+      area: 'Careers',
+      eyebrow: 'Password Reset',
+      to: [user.email],
+      subject: 'Reset your password',
+      heading: 'Reset your password',
+      intro: `Dear ${String(user.full_name || 'Candidate').replace(/[<>&"]/g, '')},<br><br>We received a request to reset the password for your WCT Careers account. Use the button below to choose a new password. The link works once and expires in 1 hour.`,
+      rows: [['Account', user.email]],
+      button: { label: 'Choose a new password', href: `${frontendBase()}/reset-password.html?token=${token}` },
+      note: "Didn't ask for this? You can ignore this email; your password stays the same.",
+      eventType: 'password_reset',
+      ref: '',
+    });
+    if (!sent.ok) {
+      // eslint-disable-next-line no-console
+      console.error(`[auth] password reset email for ${user.email} not sent (${sent.skipped || `HTTP ${sent.status}`})`);
+      return res.status(503).json({ error: 'We could not send the reset email just now. Please try again in a few minutes.' });
+    }
+  } catch (err) {
     // eslint-disable-next-line no-console
-    console.log(`[auth] password reset requested for ${email}${process.env.RESET_TOKEN_LOG === '1' ? `; token=${token}` : ''}`);
+    console.error('[auth] password reset request failed:', err.message);
+    return res.status(503).json({ error: 'We could not send the reset email just now. Please try again in a few minutes.' });
   }
-
-  return res.json({ ok: true });
+  return done();
 }));
 
 // POST /api/auth/reset-password/confirm
 router.post('/reset-password/confirm', asyncHandler(async (req, res) => {
   const { token, password } = req.body || {};
-  const entry = typeof token === 'string' ? resetTokens.get(token) : null;
-
-  if (!entry || entry.expiresAt < Date.now()) {
-    return res.status(400).json({ error: 'Invalid or expired reset token' });
-  }
+  if (typeof token !== 'string' || !token) return res.status(400).json({ error: 'This reset link is invalid. Please request a new one.' });
   if (!isStrongPassword(password)) {
     return res.status(400).json({
       error: 'Password must be at least 8 characters and include an uppercase letter, a lowercase letter, a number, and a special character',
     });
   }
+  const { rows } = await db.query(
+    'SELECT user_id FROM password_reset_tokens WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()',
+    [hashToken(token)]
+  );
+  if (!rows.length) return res.status(400).json({ error: 'This reset link has expired or was already used. Please request a new one.' });
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-  await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, entry.userId]);
-  resetTokens.delete(token);
-
+  await db.withTransaction(async (client) => {
+    await client.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, rows[0].user_id]);
+    await client.query('UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL', [rows[0].user_id]);
+  });
   return res.json({ ok: true });
 }));
 
