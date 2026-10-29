@@ -17,10 +17,8 @@ const asyncHandler = require('../lib/asyncHandler');
 const { requireCandidateAuth } = require('../middleware/auth');
 const { buildPatchUpdate, stripEmptyStrings } = require('../lib/patchMerge');
 const { generateReferenceNo } = require('../lib/referenceNo');
-const { notify, sanitizeNotificationPayload } = require('../lib/powerAutomate');
-const { getBuAdminEmails } = require('../lib/notificationHelpers');
 const businessUnits = require('../lib/businessUnits');
-const { sendApplicationReceived } = require('../lib/candidateEmails');
+const { sendSubmissionEmails } = require('../lib/submissionEmails');
 
 const router = express.Router();
 router.use(requireCandidateAuth);
@@ -213,26 +211,10 @@ router.post('/:id/submit', asyncHandler(async (req, res) => {
   );
   const submittedApp = updated.rows[0];
 
-  // Power Automate notification (mirrors the original
-  // `notify_power_automate_on_submit` trigger) — fire-and-forget, must never
-  // fail the candidate's submit request.
-  // HR admins of the unit plus its designated PIC (Business Unit Settings).
-  const unit = await businessUnits.get(submittedApp.business_unit);
-  const notifyEmails = await getBuAdminEmails(submittedApp.business_unit);
-  if (unit && unit.pic_email) notifyEmails.push(...unit.pic_email.toLowerCase().split(/[;,]\s*/).filter(Boolean));
-  notify('submit', sanitizeNotificationPayload({
-    ...submittedApp,
-    business_unit_name: unit ? unit.name : submittedApp.business_unit,
-    notify_email: [...new Set(notifyEmails)].join(';'),
-  }));
-
-  // Candidate's confirmation email, built here so its wording and logo are
-  // ours (stakeholder feedback). Switched on with CANDIDATE_CONFIRMATION_EMAIL
-  // once the old candidate email step is removed from the Submit flow, so
-  // nobody gets two. Fire-and-forget like the notification above.
-  if (/^(1|on|true|yes)$/i.test(process.env.CANDIDATE_CONFIRMATION_EMAIL || '')) {
-    sendApplicationReceived(submittedApp, unit).catch((err) => console.error('application_received email failed:', err.message));
-  }
+  // HR notification (Submit flow) and the candidate's confirmation email.
+  // Fire-and-forget: a lookup or Power Automate problem is logged and must
+  // never fail the candidate's submission (see lib/submissionEmails.js).
+  sendSubmissionEmails(submittedApp).catch((err) => console.error('submit emails failed:', err.message)); // eslint-disable-line no-console
 
   return res.json(submittedApp);
 }));
