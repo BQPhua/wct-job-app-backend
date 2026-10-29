@@ -61,6 +61,9 @@ const APPLICATION_PATCH_COLUMNS = [
   'no_working_experience',
   'spouse_name', 'spouse_nric', 'spouse_date_of_birth', 'spouse_working',
   'children_below_18', 'children_18_to_23', // jsonb — always sent in full
+  // Form v3 (migration 010): spouse's occupation and the number of children;
+  // each child's details are collected at onboarding.
+  'spouse_occupation', 'children_below_18_count', 'children_18_to_23_count',
 ];
 
 // ---------------------------------------------------------------------------
@@ -87,6 +90,10 @@ function invalidPatchReason(p) {
     if (!Array.isArray(p.language_ability) || p.language_ability.length > 30) return 'language_ability must be a list';
     if (p.language_ability.some((l) => !l || !RATINGS.includes(l.spoken || '') || !RATINGS.includes(l.written || ''))) return 'Language ratings must be Good, Fair, Slight or N/A';
   }
+  for (const k of ['children_below_18_count', 'children_18_to_23_count']) {
+    if (p[k] != null && !(Number.isInteger(p[k]) && p[k] >= 0 && p[k] <= 20)) return 'Number of children must be a whole number from 0 to 20';
+  }
+  if (p.spouse_occupation != null && String(p.spouse_occupation).length > 120) return 'Spouse occupation is too long';
   return null;
 }
 
