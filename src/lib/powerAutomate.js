@@ -56,13 +56,16 @@ const warnedMissing = new Set();
  * object — will be JSON-stringified). Never throws; logs and resolves on any
  * failure (missing URL, network error, non-2xx response) so callers can
  * `await` it (for ordering) or leave it unawaited without a try/catch.
+ * Resolves { ok, status } (plus `skipped` / `error` when nothing was sent).
+ * Note Power Automate answers 202 as soon as the trigger accepts the call;
+ * a later failing step only shows in the flow's run history.
  */
 async function notify(eventKey, payload) {
   const envVar = EVENT_URL_ENV[eventKey];
   if (!envVar) {
     // eslint-disable-next-line no-console
     console.error(`powerAutomate.notify: unknown eventKey "${eventKey}"`);
-    return;
+    return { ok: false, status: 0, skipped: 'unknown_event' };
   }
   const url = process.env[envVar];
   if (!url) {
@@ -71,7 +74,7 @@ async function notify(eventKey, payload) {
       // eslint-disable-next-line no-console
       console.warn(`powerAutomate.notify: ${envVar} is not set — skipping "${eventKey}" notifications (this is expected in local/dev)`);
     }
-    return;
+    return { ok: false, status: 0, skipped: 'no_url' };
   }
 
   // Guard against firing a webhook whose flow will just bounce back with a
@@ -84,7 +87,7 @@ async function notify(eventKey, payload) {
   if (Object.prototype.hasOwnProperty.call(payload, 'notify_email') && !payload.notify_email) {
     // eslint-disable-next-line no-console
     console.warn(`powerAutomate.notify: "${eventKey}" has no resolved notify_email — skipping webhook call to avoid a connector "To" error`);
-    return;
+    return { ok: false, status: 0, skipped: 'no_recipients' };
   }
 
   try {
@@ -97,9 +100,11 @@ async function notify(eventKey, payload) {
       // eslint-disable-next-line no-console
       console.error(`powerAutomate.notify: "${eventKey}" webhook returned ${res.status}`);
     }
+    return { ok: res.ok, status: res.status };
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error(`powerAutomate.notify: "${eventKey}" webhook call failed:`, err.message || err);
+    return { ok: false, status: 0, error: err.message || String(err) };
   }
 }
 
