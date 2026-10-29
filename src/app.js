@@ -43,8 +43,7 @@ app.get('/api/admin/events', requireAdminAuth, liveEvents.stream);
 // Only what a candidate page needs; PIC emails stay admin-only.
 app.get('/api/business-units', async (req, res, next) => {
   try {
-    const units = await require('./lib/businessUnits').list({ activeOnly: true });
-    res.json(units.map((u) => ({ code: u.code, name: u.name, ref_code: u.ref_code })));
+    res.json(await require('./lib/businessUnits').publicList());
   } catch (err) { next(err); }
 });
 
