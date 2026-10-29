@@ -49,6 +49,7 @@ const APPLICATION_PATCH_COLUMNS = [
   'willing_based_outside_klang_valley', 'physical_defects',
   'physical_defects_specify', 'arrested_convicted', 'arrested_convicted_specify',
   'referee1', 'referee2', // jsonb
+  'no_referees', // migration 009
   'declaration_lawsuit', 'declaration_lawsuit_specify',
   'declaration_other_matters', 'declaration_other_matters_specify',
   'profile_picture_url', 'attachments', // jsonb array; see task brief re: pre-uploaded file metadata/URL patch pattern
@@ -69,8 +70,8 @@ const APPLICATION_PATCH_COLUMNS = [
 // admin dashboard.
 // ---------------------------------------------------------------------------
 const FILE_URL_RE = /^(\/api\/files\/[A-Za-z0-9._\/-]+\?exp=\d{1,12}&sig=[A-Za-z0-9_-]+|https:\/\/[a-z0-9-]+\.blob\.core\.windows\.net\/[A-Za-z0-9._~%\/?&=:+-]+)$/;
-const DOC_CATEGORIES = ['ic_front', 'ic_back', 'resume', 'academic', 'payslip', 'other'];
-const RATINGS = ['', 'Good', 'Fair', 'Slight'];
+const DOC_CATEGORIES = ['ic_front', 'ic_back', 'resume', 'academic', 'payslip', 'declaration', 'other'];
+const RATINGS = ['', 'Good', 'Fair', 'Slight', 'N/A'];
 function invalidPatchReason(p) {
   if (p.profile_picture_url != null && !FILE_URL_RE.test(String(p.profile_picture_url))) return 'profile_picture_url must be an uploaded file link';
   if (p.attachments !== undefined) {
@@ -84,7 +85,7 @@ function invalidPatchReason(p) {
   }
   if (p.language_ability !== undefined) {
     if (!Array.isArray(p.language_ability) || p.language_ability.length > 30) return 'language_ability must be a list';
-    if (p.language_ability.some((l) => !l || !RATINGS.includes(l.spoken || '') || !RATINGS.includes(l.written || ''))) return 'Language ratings must be Good, Fair or Slight';
+    if (p.language_ability.some((l) => !l || !RATINGS.includes(l.spoken || '') || !RATINGS.includes(l.written || ''))) return 'Language ratings must be Good, Fair, Slight or N/A';
   }
   return null;
 }
