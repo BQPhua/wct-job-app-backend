@@ -783,7 +783,7 @@ const conflictMessage = (err) => (/ref_code/.test(err.constraint || '') ? 'Anoth
 // GET /api/admin/business-units — every unit (inactive ones too) with company counts.
 router.get('/business-units', asyncHandler(async (req, res) => {
   const { rows } = await db.query(`
-    SELECT b.code, b.name, b.ref_code, b.pic_email, b.sort_order, b.is_active,
+    SELECT b.code, b.name, b.ref_code, b.pic_email, b.sort_order, b.is_active, b.merged_into,
            (SELECT count(*)::int FROM companies c WHERE c.business_unit = b.code) AS company_count,
            (SELECT count(*)::int FROM applications a WHERE a.business_unit = b.code AND a.status <> 'draft') AS application_count
       FROM business_units b
