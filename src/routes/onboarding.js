@@ -102,7 +102,8 @@ router.get('/:application_id', asyncHandler(async (req, res) => {
   // record from before that keeps its own copy, which wins if filled in.
   const [companies, fam] = await Promise.all([
     db.query('SELECT name FROM companies WHERE business_unit = $1 ORDER BY name', [ctx.app.business_unit]),
-    db.query(`SELECT spouse_name, spouse_nric, spouse_date_of_birth, spouse_working, children_below_18, children_18_to_23
+    db.query(`SELECT spouse_name, spouse_nric, spouse_date_of_birth, spouse_working, spouse_occupation,
+                     children_below_18, children_18_to_23, children_below_18_count, children_18_to_23_count
                 FROM applications WHERE id = $1`, [ctx.app.id]),
   ]);
   return res.json({
