@@ -50,6 +50,7 @@ const EVENT_URL_ENV = {
 };
 
 const warnedMissing = new Set();
+const PA_TIMEOUT_MS = Number(process.env.POWER_AUTOMATE_TIMEOUT_MS) || 20000;
 
 /**
  * Fire a Power Automate webhook for `eventKey` with `payload` (a plain JS
@@ -95,6 +96,7 @@ async function notify(eventKey, payload) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(PA_TIMEOUT_MS), // a stuck flow must not hold the request open
     });
     if (!res.ok) {
       // eslint-disable-next-line no-console
@@ -136,11 +138,15 @@ async function sendOffboardingEmail(payload) {
     console.warn(`powerAutomate: offboarding "${payload && payload.event_type}" email has no recipients — skipped`);
     return { ok: false, status: 0, skipped: 'no_recipients' };
   }
+  // Every email says it comes from an unattended mailbox (stakeholder
+  // feedback, 30 Oct 2026).
+  if (payload.subject && !/do not reply/i.test(payload.subject)) payload = { ...payload, subject: `${payload.subject} [Do Not Reply]` };
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(PA_TIMEOUT_MS), // a stuck flow must not hold the request open
     });
     if (!res.ok) {
       // eslint-disable-next-line no-console
