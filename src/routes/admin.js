@@ -476,6 +476,8 @@ router.get('/export', asyncHandler(async (req, res) => {
             o.spouse_nric        AS ob_spouse_nric,
             o.spouse_date_of_birth AS ob_spouse_date_of_birth,
             o.spouse_working     AS ob_spouse_working,
+            o.spouse_citizen     AS ob_spouse_citizen,
+            o.spouse_passport_no AS ob_spouse_passport_no,
             o.children_below_18  AS ob_children_below_18,
             o.children_18_to_23  AS ob_children_18_to_23,
             o.emergency_contacts AS ob_emergency_contacts,
