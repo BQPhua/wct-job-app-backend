@@ -106,7 +106,7 @@ test('super admin session and legacy BU tokens keep full job-app access', async 
 });
 
 test('granting roles: payroll per unit or all units; clearance PIC refused', async () => {
-  const pa = await require('./helpers/paStub').start(['POWER_AUTOMATE_URL_ADMIN_ACTIVE']);
+  const pa = await require('./helpers/paStub').start(['POWER_AUTOMATE_URL_OFFBOARDING_EMAIL']);
   const boss = await session('boss@wct.my');
   const auth = { Authorization: `Bearer ${boss.body.token}` };
   const target = await db().query("SELECT id FROM admin_users WHERE email = 'target@wct.my'");
@@ -128,8 +128,9 @@ test('granting roles: payroll per unit or all units; clearance PIC refused', asy
   assert.equal(badBu.status, 400);
 
   await new Promise((r) => setTimeout(r, 50));
-  const labels = pa.calls.map((c) => c.body.role_label);
-  assert.ok(labels.includes('Payroll PIC (Mall)'), labels.join(' | '));
-  assert.ok(labels.includes('Payroll PIC (all business units)'));
+  // Access emails are built on the server and name the unit (not its code).
+  const html = pa.byEvent('admin_grant_added').map((c) => c.body.html).join(' | ');
+  assert.match(html, /Payroll PIC \(Malls Management\)/);
+  assert.match(html, /Payroll PIC \(all business units\)/);
   await pa.stop();
 });
