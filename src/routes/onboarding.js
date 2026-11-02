@@ -45,6 +45,7 @@ const ONBOARDING_PATCH_COLUMNS = [
   'epf_no', 'income_tax_no', 'tax_branch', 'socso_no', 'bank_account_no',
   'cidb_green_card_no', 'cidb_branch',
   'spouse_name', 'spouse_nric', 'spouse_date_of_birth', 'spouse_working',
+  'spouse_citizen', 'spouse_passport_no', // migration 011
   'children_below_18', 'children_18_to_23', // jsonb — always sent in full (spec §1.3)
   'emergency_contacts', // jsonb — always sent in full
   'beneficiary_name', 'beneficiary_relationship', 'beneficiary_contact',
@@ -52,6 +53,28 @@ const ONBOARDING_PATCH_COLUMNS = [
   'salary_company', 'salary_bank', 'salary_branch', 'salary_account_no',
   'salary_ic_submitted',
 ];
+
+// Spouse and children ID numbers (3 Nov 2026): a Malaysian gives a 12-digit
+// NRIC, anyone else a passport number. Returns an error message or null.
+const CITIZEN = ['Malaysian', 'Non-Malaysian'];
+const NRIC_RE = /^\d{12}$/;
+const PASSPORT_RE = /^[A-Za-z0-9]{5,20}$/;
+function invalidFamilyPatch(p) {
+  if (p.spouse_citizen != null && p.spouse_citizen !== '' && !CITIZEN.includes(p.spouse_citizen)) return 'Spouse citizen must be Malaysian or Non-Malaysian';
+  if (p.spouse_nric != null && p.spouse_nric !== '' && !NRIC_RE.test(String(p.spouse_nric))) return 'Spouse NRIC must be exactly 12 digits';
+  if (p.spouse_passport_no != null && p.spouse_passport_no !== '' && !PASSPORT_RE.test(String(p.spouse_passport_no))) return 'Spouse passport no. must be 5-20 letters or digits';
+  for (const key of ['children_below_18', 'children_18_to_23']) {
+    if (p[key] === undefined) continue;
+    if (!Array.isArray(p[key]) || p[key].length > 20) return 'Children must be a list (at most 20)';
+    for (const c of p[key]) {
+      if (!c || typeof c !== 'object') return 'Each child must be an object';
+      if (c.citizen && !CITIZEN.includes(c.citizen)) return 'Child citizen must be Malaysian or Non-Malaysian';
+      if (c.nric && !NRIC_RE.test(String(c.nric))) return `${c.name || 'Child'}: NRIC must be exactly 12 digits`;
+      if (c.passport_no && !PASSPORT_RE.test(String(c.passport_no))) return `${c.name || 'Child'}: passport no. must be 5-20 letters or digits`;
+    }
+  }
+  return null;
+}
 
 /**
  * Verify the application belongs to req.user and is status='hired', then
@@ -123,9 +146,8 @@ router.patch('/:application_id', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'patch is required' });
   }
 
-  if (patch.spouse_nric != null && !/^[A-Za-z0-9]{5,20}$/.test(String(patch.spouse_nric))) {
-    return res.status(400).json({ error: 'Spouse NRIC / passport no. must be 5-20 letters or digits, no dashes' });
-  }
+  const bad = invalidFamilyPatch(patch);
+  if (bad) return res.status(400).json({ error: bad });
   if (patch.spouse_date_of_birth != null && patch.spouse_date_of_birth !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(String(patch.spouse_date_of_birth))) {
     return res.status(400).json({ error: 'Spouse date of birth must be a date' });
   }
