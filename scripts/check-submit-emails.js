@@ -22,6 +22,7 @@ else console.log(`(no ${envFile}; using this shell's environment)`);
 
 const root = path.join(__dirname, '..');
 const db = require(path.join(root, 'src/db'));
+const { flowsOn } = require(path.join(root, 'src/lib/eventEmails'));
 const { sendSubmissionEmails, submissionRecipients, candidateEmailOn } = require(path.join(root, 'src/lib/submissionEmails'));
 
 const [ref, flag] = process.argv.slice(2);
@@ -32,8 +33,8 @@ const show = (r) => (r.ok ? `sent (Power Automate replied ${r.status})`
 
 (async () => {
   console.log('Settings');
-  console.log(`  POWER_AUTOMATE_URL_SUBMIT ............ ${set('POWER_AUTOMATE_URL_SUBMIT')}   (HR "new application" email)`);
-  console.log(`  POWER_AUTOMATE_URL_OFFBOARDING_EMAIL . ${set('POWER_AUTOMATE_URL_OFFBOARDING_EMAIL')}   (generic email flow)`);
+  console.log(`  POWER_AUTOMATE_URL_OFFBOARDING_EMAIL . ${set('POWER_AUTOMATE_URL_OFFBOARDING_EMAIL')}   (generic email flow: sends every email)`);
+  console.log(`  EVENT_EMAILS_VIA_FLOWS ............... ${flowsOn() ? 'on  -> old per-event flows (Submit flow for HR)' : 'off -> HR email built by the server'}`);
   console.log(`  CANDIDATE_CONFIRMATION_EMAIL ......... ${candidateEmailOn() ? 'on  -> the server emails the candidate' : 'off -> only the Submit flow can email the candidate'}`);
   if (!ref) { await db.pool.end(); return; }
 
