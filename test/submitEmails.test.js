@@ -21,7 +21,8 @@ before(async () => {
 beforeEach(() => pa.reset());
 after(async () => { delete process.env.CANDIDATE_CONFIRMATION_EMAIL; await pa.stop(); await db().pool.end(); });
 
-const submitCalls = () => pa.calls.filter((c) => c.url.includes('POWER_AUTOMATE_URL_SUBMIT'));
+// HR's email is built on the server and sent through the generic email flow (3 Nov 2026).
+const submitCalls = () => pa.byEvent('application_submitted_hr');
 async function submit(bu, beforeSubmit) {
   const d = (await request().post('/api/applications').set('Authorization', `Bearer ${cand.token}`).send({ business_unit: bu })).body;
   await db().query("UPDATE applications SET pdpa_agreed = true, email = 'applicant@gmail.com', name_nric = 'Siti Aminah' WHERE id = $1", [d.id]);
@@ -37,15 +38,17 @@ describe('HR notification on submit', () => {
     const { res } = await submit('Land');
     assert.equal(res.status, 200);
     assert.equal(submitCalls().length, 1);
-    assert.equal(submitCalls()[0].body.notify_email, 'hr.land@wct.my;pic.land@wct.my');
-    assert.equal(submitCalls()[0].body.business_unit_name, 'Property Development');
+    assert.equal(submitCalls()[0].body.to, 'hr.land@wct.my;pic.land@wct.my');
+    assert.match(submitCalls()[0].body.html, /Property Development/);
+    assert.doesNotMatch(submitCalls()[0].body.html, />Land</);
+    assert.match(submitCalls()[0].body.subject, /\[Do Not Reply\]$/);
   });
 
   test('a unit with no HR admin or PIC still emails the super admins', async () => {
     const { res } = await submit('Hotels');
     assert.equal(res.status, 200);
     assert.equal(submitCalls().length, 1);
-    assert.equal(submitCalls()[0].body.notify_email, 'boss@wct.my');
+    assert.equal(submitCalls()[0].body.to, 'boss@wct.my');
   });
 
   test('if the business unit list cannot be read, the submission still succeeds and HR is still emailed', async () => {
@@ -54,7 +57,7 @@ describe('HR notification on submit', () => {
       assert.equal(res.status, 200, JSON.stringify(res.body));
       assert.equal(res.body.status, 'submitted');
       assert.equal(submitCalls().length, 1);
-      assert.equal(submitCalls()[0].body.notify_email, 'hr.land@wct.my');
+      assert.equal(submitCalls()[0].body.to, 'hr.land@wct.my');
     } finally {
       await db().query('ALTER TABLE business_units_hidden RENAME TO business_units');
     }
