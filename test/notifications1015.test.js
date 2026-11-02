@@ -24,7 +24,8 @@ before(async () => {
 beforeEach(() => pa.reset());
 after(async () => { await pa.stop(); await db().pool.end(); });
 
-const statusCalls = () => pa.calls.filter((c) => c.url.includes('POWER_AUTOMATE_URL_STATUS_CHANGE'));
+// Status emails are built on the server (3 Nov 2026): only Hired is emailed.
+const statusCalls = () => pa.calls.filter((c) => c.url.includes('POWER_AUTOMATE_URL_STATUS_CHANGE') || ['hired', 'rejected'].includes(c.body && c.body.event_type));
 
 async function submittedApp(email) {
   const a = await fx.hiredApplication({ email, business_unit: 'Land' });
@@ -48,7 +49,8 @@ describe('status-change emails', () => {
     assert.equal(res.status, 200, JSON.stringify(res.body));
     await wait();
     assert.equal(statusCalls().length, 1);
-    assert.equal(statusCalls()[0].body.status, 'hired');
+    assert.equal(statusCalls()[0].body.event_type, 'hired');
+    assert.equal(statusCalls()[0].body.to, 'hire.me@gmail.com');
   });
 });
 
