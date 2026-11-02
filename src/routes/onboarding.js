@@ -102,7 +102,7 @@ router.get('/:application_id', asyncHandler(async (req, res) => {
   // record from before that keeps its own copy, which wins if filled in.
   const [companies, fam] = await Promise.all([
     db.query('SELECT name FROM companies WHERE business_unit = $1 ORDER BY name', [ctx.app.business_unit]),
-    db.query(`SELECT spouse_name, spouse_nric, spouse_date_of_birth, spouse_working, spouse_occupation,
+    db.query(`SELECT marital_status, spouse_name, spouse_nric, spouse_date_of_birth, spouse_working, spouse_occupation,
                      children_below_18, children_18_to_23, children_below_18_count, children_18_to_23_count
                 FROM applications WHERE id = $1`, [ctx.app.id]),
   ]);
@@ -123,6 +123,12 @@ router.patch('/:application_id', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'patch is required' });
   }
 
+  if (patch.spouse_nric != null && !/^[A-Za-z0-9]{5,20}$/.test(String(patch.spouse_nric))) {
+    return res.status(400).json({ error: 'Spouse NRIC / passport no. must be 5-20 letters or digits, no dashes' });
+  }
+  if (patch.spouse_date_of_birth != null && patch.spouse_date_of_birth !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(String(patch.spouse_date_of_birth))) {
+    return res.status(400).json({ error: 'Spouse date of birth must be a date' });
+  }
   const cleanPatch = stripEmptyStrings(patch);
   const update = buildPatchUpdate('onboarding_records', 'application_id', req.params.application_id, cleanPatch, ONBOARDING_PATCH_COLUMNS);
 
