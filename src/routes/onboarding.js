@@ -15,7 +15,7 @@ const db = require('../db');
 const asyncHandler = require('../lib/asyncHandler');
 const { requireCandidateAuth } = require('../middleware/auth');
 const { buildPatchUpdate, stripEmptyStrings } = require('../lib/patchMerge');
-const { notify, sanitizeNotificationPayload } = require('../lib/powerAutomate');
+const eventEmails = require('../lib/eventEmails');
 const { getManagerEmail } = require('../lib/notificationHelpers');
 
 const router = express.Router();
@@ -203,14 +203,7 @@ router.post('/:application_id/confirm-section', asyncHandler(async (req, res) =>
     // Power Automate notification (mirrors the original
     // `notify_power_automate_on_onboarding_complete` trigger).
     const notifyEmail = await getManagerEmail(ctx.app.business_unit);
-    notify('onboarding_complete', sanitizeNotificationPayload({
-      ...result,
-      notify_email: notifyEmail,
-      reference_no: ctx.app.reference_no || '',
-      name_nric: ctx.app.name_nric || '',
-      business_unit: ctx.app.business_unit || '',
-      business_unit_name: (await businessUnits.nameMap())[ctx.app.business_unit] || ctx.app.business_unit || '',
-    }));
+    eventEmails.sendOnboardingCompleted(ctx.app, result, notifyEmail);
   }
 
   return res.json(result);
