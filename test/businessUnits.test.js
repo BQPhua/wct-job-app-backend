@@ -66,10 +66,10 @@ describe('candidate drafts', () => {
       .send({ reference_no: d.body.reference_no });
     assert.equal(res.status, 200);
     await new Promise((r) => setTimeout(r, 100));
-    const submit = pa.calls.find((c) => c.url.includes('POWER_AUTOMATE_URL_SUBMIT'));
-    assert.ok(submit, 'submit webhook fired');
-    assert.deepEqual(submit.body.notify_email.split(';').sort(), ['hr.land@wct.my', 'pic.land@wct.my']);
-    assert.equal(submit.body.business_unit_name, 'Property Development');
+    const submit = pa.byEvent('application_submitted_hr')[0];
+    assert.ok(submit, 'HR email sent');
+    assert.deepEqual(submit.body.to.split(';').sort(), ['hr.land@wct.my', 'pic.land@wct.my']);
+    assert.match(submit.body.html, /Property Development/);
   });
 });
 
@@ -119,19 +119,22 @@ describe('Business Unit Settings (super admin)', () => {
     assert.equal(res.body.business_unit, 'Hotels');
     assert.equal((await api('patch', `/applications/${a.id}`, SUPER, { business_unit: 'Nope' })).status, 400);
     await new Promise((r) => setTimeout(r, 100));
-    const transfer = pa.calls.find((c) => c.url.includes('POWER_AUTOMATE_URL_BU_TRANSFER'));
-    assert.ok(transfer, 'transfer webhook fired');
-    assert.equal(transfer.body.business_unit_name, 'Hotels');
-    assert.equal(transfer.body.from_business_unit_name, 'Property Development');
+    const transfer = pa.byEvent('bu_transfer')[0];
+    assert.ok(transfer, 'transfer email sent');
+    assert.match(transfer.body.subject, /Application transferred to Hotels/);
+    assert.match(transfer.body.html, /from <b>Property Development<\/b> to <b>Hotels<\/b>/);
   });
-  test('status-change notifications carry the unit display name', async () => {
+  test('the hired email shows the unit display name, not its code', async () => {
     const a = await fx.hiredApplication({ email: 'status.name@wct.my', business_unit: 'Land' });
     await db().query("UPDATE applications SET status = 'submitted' WHERE id = $1", [a.id]);
-    const res = await api('post', `/applications/${a.id}/status`, SUPER, { status: 'shortlisted' });
+    const res = await api('post', `/applications/${a.id}/status`, SUPER, { status: 'hired' });
     assert.equal(res.status, 200, JSON.stringify(res.body));
     await new Promise((r) => setTimeout(r, 100));
-    const call = pa.calls.find((c) => c.url.includes('POWER_AUTOMATE_URL_STATUS_CHANGE'));
-    assert.ok(call, 'status webhook fired');
-    assert.equal(call.body.business_unit_name, 'Property Development');
+    const call = pa.byEvent('hired')[0];
+    assert.ok(call, 'hired email sent');
+    assert.equal(call.body.to, 'status.name@wct.my');
+    assert.match(call.body.html, /Property Development/);
+    assert.doesNotMatch(call.body.html, />Land</);
+    assert.match(call.body.html, /index\.html\?onboarding=/);
   });
 });
