@@ -549,11 +549,13 @@ router.patch('/applications/:id', asyncHandler(async (req, res) => {
 
   const patch = { ...(req.body || {}) };
 
-  // business_unit reassignment is only ever allowed for an All-Units admin
-  // (spec §1.5) — a bu_admin's patch must never include it, even if sent
-  // (defense in depth beyond the UI hiding the control).
-  if (Object.prototype.hasOwnProperty.call(patch, 'business_unit') && !isSuperAdmin(req.admin)) {
-    return res.status(403).json({ error: 'Only an All-Units admin may reassign business_unit' });
+  // Transfer to another business unit (3 Nov 2026): an All-Units admin, or
+  // the HR admin of the unit the application is in now (fetchScopedApplication
+  // already checked it is theirs). After the move it belongs to the new unit's
+  // team, and the sending unit no longer sees it.
+  if (Object.prototype.hasOwnProperty.call(patch, 'business_unit') && patch.business_unit !== app.business_unit
+      && !isSuperAdmin(req.admin) && !(req.admin.roles && req.admin.roles.bu_admin)) {
+    return res.status(403).json({ error: "Only an HR admin may transfer an application to another business unit" });
   }
   if (patch.business_unit && await badBu(res, patch.business_unit)) return;
 
