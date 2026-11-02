@@ -18,15 +18,15 @@ const db = require('../db');
 const asyncHandler = require('../lib/asyncHandler');
 const { requireAdminAuth } = require('../middleware/auth');
 const { buildPatchUpdate } = require('../lib/patchMerge');
-const { notify, sanitizeNotificationPayload } = require('../lib/powerAutomate');
 const { getManagerEmail } = require('../lib/notificationHelpers');
 // Called through the module object (not destructured) so tests can stub
 // Microsoft token verification.
 const oauthVerify = require('../lib/oauthVerify');
-const { resolveAdminGrants, requireHrAdmin, formatRoleLabel } = require('../lib/offboarding/access');
+const { resolveAdminGrants, requireHrAdmin } = require('../lib/offboarding/access');
 
 const businessUnits = require('../lib/businessUnits');
 const { sendOnboardingReminder } = require('../lib/candidateEmails');
+const eventEmails = require('../lib/eventEmails');
 
 const router = express.Router();
 
@@ -38,8 +38,6 @@ const badBu = async (res, code) => {
   return true;
 };
 
-// Human-readable role labels (formatRoleLabel) live in lib/offboarding/access.js
-// so the new Payroll/Clearance PIC roles are labelled consistently everywhere.
 // Statuses selectable via the status-setter (spec §6.4). 'offboarding' is no
 // longer an application status (2026-09-30): offboarding is its own
 // invite-driven module — see routes/adminOffboarding.js.
@@ -48,11 +46,6 @@ const ALL_KNOWN_STATUSES = [
   'draft', 'submitted', 'under_review', 'shortlisted', 'interview_scheduled',
   'offer_sent', 'withdrawn', 'kiv', 'hired', 'rejected', 'blacklisted',
 ];
-
-// Base URL of the live candidate/admin site, used to build the links in
-// Power Automate notification payloads. Set FRONTEND_BASE_URL in the server's
-// env file; falls back to the live address.
-const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || 'https://hrforms.wct.my';
 
 function isSuperAdmin(admin) {
   return admin.unitScope === 'ALL';
@@ -579,15 +572,7 @@ router.patch('/applications/:id', asyncHandler(async (req, res) => {
     updated.status !== 'draft'
   ) {
     const notifyEmail = await getManagerEmail(updated.business_unit);
-    const names = await businessUnits.nameMap();
-    notify('bu_transfer', sanitizeNotificationPayload({
-      ...updated,
-      notify_email: notifyEmail,
-      from_business_unit: app.business_unit || '',
-      // Display names ("Property Development") for the email wording.
-      business_unit_name: names[updated.business_unit] || updated.business_unit,
-      from_business_unit_name: names[app.business_unit] || app.business_unit || '',
-    }));
+    eventEmails.sendTransfer(updated, app.business_unit, notifyEmail);
   }
 
   return res.json(updated);
@@ -730,11 +715,9 @@ router.post('/applications/:id/status', asyncHandler(async (req, res) => {
   // candidates are no longer emailed when their status changes.
   const NOTIFY_STATUSES = ['under_review', 'shortlisted', 'interview_scheduled', 'offer_sent', 'hired', 'withdrawn', 'blacklisted'];
   if (NOTIFY_STATUSES.includes(result.status)) {
+    // Server-built email (lib/eventEmails.js): the candidate is emailed when hired.
     const notifyEmail = await getManagerEmail(result.business_unit);
-    const names = await businessUnits.nameMap();
-    notify('status_change', sanitizeNotificationPayload({
-      ...result, notify_email: notifyEmail, business_unit_name: names[result.business_unit] || result.business_unit,
-    }));
+    eventEmails.sendStatusChange(result, notifyEmail);
   }
 
   return res.json(result);
@@ -1166,11 +1149,10 @@ router.post('/admins', requireSuperAdmin, asyncHandler(async (req, res) => {
   // fallback-to-email-then-generic-label chain reproduced here.
   const inviterRows = await db.query('SELECT display_name, email FROM admin_users WHERE id = $1', [req.admin.adminUserId]);
   const inviter = inviterRows.rows[0];
-  notify('invite_admin', {
-    invited_email: invited.email,
-    invited_name: invited.display_name || '',
-    invited_by_name: (inviter && (inviter.display_name || inviter.email)) || 'A Super Admin',
-    admin_login_link: `${FRONTEND_BASE_URL}/admin.html`,
+  eventEmails.sendAdminInvite({
+    email: invited.email,
+    name: invited.display_name || '',
+    invitedBy: (inviter && (inviter.display_name || inviter.email)) || 'A Super Admin',
   });
 
   return res.status(201).json(invited);
@@ -1225,15 +1207,12 @@ router.post('/admins/:admin_user_id/grants', requireSuperAdmin, asyncHandler(asy
   // and admin-active, switched on `event_type`.
   const granterRows = await db.query('SELECT display_name FROM admin_users WHERE id = $1', [req.admin.adminUserId]);
   const granter = granterRows.rows[0];
-  notify('admin_permission_change', {
-    event_type: 'grant_added',
-    target_email: targetAdmin.email,
-    target_name: targetAdmin.display_name || targetAdmin.email,
-    role: grant.role,
-    business_unit: grant.business_unit || '',
-    role_label: formatRoleLabel(grant.role, grant.business_unit, grant.department_id),
-    changed_by_name: (granter && granter.display_name) || 'A Super Admin',
-    admin_login_link: `${FRONTEND_BASE_URL}/admin.html`,
+  eventEmails.sendPermissionChange({
+    eventType: 'grant_added',
+    email: targetAdmin.email,
+    name: targetAdmin.display_name || targetAdmin.email,
+    grants: [grant],
+    changedBy: (granter && granter.display_name) || 'A Super Admin',
   });
 
   return res.status(201).json(grant);
@@ -1258,15 +1237,12 @@ router.delete('/grants/:grant_id', requireSuperAdmin, asyncHandler(async (req, r
 
   const revokerRows = await db.query('SELECT display_name FROM admin_users WHERE id = $1', [req.admin.adminUserId]);
   const revoker = revokerRows.rows[0];
-  notify('admin_permission_change', {
-    event_type: 'grant_revoked',
-    target_email: grant.email,
-    target_name: grant.display_name || grant.email,
-    role: grant.role,
-    business_unit: grant.business_unit || '',
-    role_label: formatRoleLabel(grant.role, grant.business_unit, grant.department_id),
-    changed_by_name: (revoker && revoker.display_name) || 'A Super Admin',
-    admin_login_link: `${FRONTEND_BASE_URL}/admin.html`,
+  eventEmails.sendPermissionChange({
+    eventType: 'grant_revoked',
+    email: grant.email,
+    name: grant.display_name || grant.email,
+    grants: [grant],
+    changedBy: (revoker && revoker.display_name) || 'A Super Admin',
   });
 
   return res.status(204).send();
@@ -1302,17 +1278,12 @@ router.patch('/admins/:admin_user_id/active', requireSuperAdmin, asyncHandler(as
     'SELECT role, business_unit, department_id FROM admin_grants WHERE admin_user_id = $1 ORDER BY role, business_unit',
     [req.params.admin_user_id]
   );
-  const roleLabel = grantRows.rows.map((g) => formatRoleLabel(g.role, g.business_unit, g.department_id)).join(', ');
-
-  notify('admin_permission_change', {
-    event_type: isActive ? 'reactivated' : 'deactivated',
-    target_email: target.email,
-    target_name: target.display_name || target.email,
-    role: grantRows.rows.map((g) => g.role).join(','),
-    business_unit: grantRows.rows.map((g) => g.business_unit).filter(Boolean).join(','),
-    role_label: roleLabel,
-    changed_by_name: (changer && changer.display_name) || 'A Super Admin',
-    admin_login_link: `${FRONTEND_BASE_URL}/admin.html`,
+  eventEmails.sendPermissionChange({
+    eventType: isActive ? 'reactivated' : 'deactivated',
+    email: target.email,
+    name: target.display_name || target.email,
+    grants: grantRows.rows,
+    changedBy: (changer && changer.display_name) || 'A Super Admin',
   });
 
   return res.json(target);
