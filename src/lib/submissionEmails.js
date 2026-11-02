@@ -15,7 +15,7 @@
 // the result, and must never fail the candidate's submission.
 // ============================================================================
 
-const { notify, sanitizeNotificationPayload } = require('./powerAutomate');
+const { sendNewApplicationToHr } = require('./eventEmails');
 const { getBuAdminEmails } = require('./notificationHelpers');
 const businessUnits = require('./businessUnits');
 const { sendApplicationReceived } = require('./candidateEmails');
@@ -45,11 +45,8 @@ async function submissionRecipients(app) {
 /** Send both submission emails for a submitted application row. */
 async function sendSubmissionEmails(app) {
   const { unit, notifyEmail } = await submissionRecipients(app);
-  const hr = await notify('submit', sanitizeNotificationPayload({
-    ...app,
-    business_unit_name: unit ? unit.name : app.business_unit,
-    notify_email: notifyEmail,
-  }));
+  // Built on the server in the standard layout (lib/eventEmails.js).
+  const hr = await sendNewApplicationToHr(app, unit, notifyEmail);
   let candidate = { ok: false, skipped: 'switched_off' };
   if (candidateEmailOn()) {
     candidate = await sendApplicationReceived(app, unit).catch((err) => ({ ok: false, error: err.message }));
