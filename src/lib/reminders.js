@@ -10,6 +10,7 @@
 //   Exit Interview not submitted   employee        3 and 7 days after invite
 //   Acknowledgement not given      employee        2 and 5 days after clearance
 //   Final pay not marked done      Payroll PICs    3 and 7 days after ack
+//   HR sign-off not given          BU HR admins    2 and 5 days after submit
 //   Onboarding not completed       new hire        3 and 7 days after hire
 //   Weekly HR digest (Mondays)     BU HR admins    applications waiting > 3 days
 //
@@ -30,6 +31,7 @@ const STEPS = {
   invite_reminder: [3, 7],
   ack_reminder: [2, 5],
   payroll_reminder: [3, 7],
+  hr_signoff_reminder: [2, 5],
   onboarding_reminder: [3, 7],
 };
 const HR_DIGEST_MIN_DAYS = 3;
@@ -59,6 +61,7 @@ async function offboardingFollowUps(today, stats) {
               FROM offboarding_cases c WHERE c.status = 'pending_acknowledgement'`,
     },
     { kind: 'payroll_reminder', sql: "SELECT id, acknowledged_at AS since FROM offboarding_cases WHERE status = 'pending_payroll'" },
+    { kind: 'hr_signoff_reminder', sql: "SELECT id, submitted_at AS since FROM offboarding_cases WHERE status = 'pending_hr_signoff'" },
   ];
   for (const plan of plans) {
     // eslint-disable-next-line no-await-in-loop
