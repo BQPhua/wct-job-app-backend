@@ -34,10 +34,10 @@ before(async () => { await resetDb(); });
 after(async () => { await db().pool.end(); });
 
 describe('constants and dates', () => {
-  test('12 exit reasons in the form order, 6 statuses', () => {
+  test('12 exit reasons in the form order, 7 statuses', () => {
     assert.equal(EXIT_REASONS.length, 12);
     assert.equal(EXIT_REASONS[0], 'Compensation (Salary / Benefits)');
-    assert.deepEqual(STATUSES, ['invited', 'clearance_in_progress', 'pending_acknowledgement', 'pending_payroll', 'completed', 'cancelled']);
+    assert.deepEqual(STATUSES, ['invited', 'pending_hr_signoff', 'clearance_in_progress', 'pending_acknowledgement', 'pending_payroll', 'completed', 'cancelled']);
   });
   test('date helpers', () => {
     assert.equal(dates.daysBetween('2026-10-01', '2026-10-08'), 7);
