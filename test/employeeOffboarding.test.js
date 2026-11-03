@@ -17,6 +17,7 @@ async function invite(email) {
   const res = await request().post('/api/admin/offboarding/cases').set('Authorization', HR).send({
     employee_email: email || `emp${n}@wct.my`, employee_name: `Employee ${n}`, business_unit: 'Land',
     position: 'Engineer', department: 'Construction', date_joined: '2021-01-04', immediate_superior_email: 'sup@wct.my',
+    official_last_day: '2026-11-15', actual_last_day: '2026-11-10',
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
   const { rows } = await db().query('SELECT * FROM offboarding_cases WHERE id = $1', [res.body.case.id]);
@@ -27,7 +28,6 @@ const emp = (method, url, token, body) => {
   return body ? r.send(body) : r;
 };
 const GOOD = {
-  notice_period_days: 30, official_last_day: '2026-11-15', actual_last_day: '2026-11-20',
   reasons: ['Better Offer', 'Health'], reasons_other: ['Moving closer to family'], comments: 'Thanks team',
   immediate_superior_name: 'Sue',
 };
@@ -107,26 +107,24 @@ describe('employee flow', () => {
     assert.equal(draft.body.exitInterview.comments, 'draft');
 
     const submit = (body) => emp('post', `/mine/${c.id}/exit-interview/submit`, who.token, body);
-    let r = await submit({ ...GOOD, official_last_day: '2026-10-15', signature_name: 'Emp', declaration: true });
+    let r = await submit({ ...GOOD, reasons: [], reasons_other: [], signature_name: 'Emp', declaration: true });
     assert.equal(r.status, 422);
-    assert.equal(r.body.field, 'official_last_day');
-    r = await submit({ ...GOOD, actual_last_day: '2026-09-01', signature_name: 'Emp', declaration: true });
-    assert.equal(r.body.field, 'actual_last_day');
-    r = await submit({ ...GOOD, actual_last_day: '2026-11-14', signature_name: 'Emp', declaration: true });
-    assert.equal(r.status, 422);
-    assert.equal(r.body.field, 'actual_last_day');
-    assert.match(r.body.error, /before your official last day/);
-    // Same day as the official last day passes the date checks (fails later on reasons).
-    r = await submit({ ...GOOD, actual_last_day: GOOD.official_last_day, reasons: [], reasons_other: [], signature_name: 'Emp', declaration: true });
-    assert.equal(r.body.field, 'reasons');
-    r = await submit({ ...GOOD, reasons: [], reasons_other: [], signature_name: 'Emp', declaration: true });
     assert.equal(r.body.field, 'reasons');
     r = await submit({ ...GOOD, signature_name: '  ', declaration: true });
     assert.equal(r.body.field, 'signature_name');
     r = await submit({ ...GOOD, signature_name: 'Emp', declaration: false });
     assert.equal(r.body.field, 'declaration');
-    r = await submit({ ...GOOD, notice_period_days: -1, signature_name: 'Emp', declaration: true });
-    assert.equal(r.body.field, 'notice_period_days');
+
+    // Dates belong to HR: anything the employee sends is ignored.
+    await emp('patch', `/mine/${c.id}/exit-interview`, who.token, { official_last_day: '2027-01-01', actual_last_day: '2027-01-02', notice_period_days: 5 });
+    const { rows } = await db().query('SELECT official_last_day::text o, actual_last_day::text a FROM offboarding_cases WHERE id = $1', [c.id]);
+    assert.deepEqual(rows[0], { o: '2026-11-15', a: '2026-11-10' });
+
+    // Missing HR dates block the submission.
+    await db().query('UPDATE offboarding_cases SET actual_last_day = NULL WHERE id = $1', [c.id]);
+    r = await submit({ ...GOOD, signature_name: 'Emp', declaration: true });
+    assert.equal(r.status, 409);
+    assert.match(r.body.error, /Physical Last Working Date/);
   });
 
   test('submit → clearance_in_progress, 6 sections, HR + department emails; locked afterwards', async () => {
