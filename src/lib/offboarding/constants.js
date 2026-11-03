@@ -3,13 +3,14 @@
 // Offboarding constants shared by the API, mailer and PDF generator.
 
 const STATUSES = [
-  'invited', 'clearance_in_progress', 'pending_acknowledgement',
+  'invited', 'pending_hr_signoff', 'clearance_in_progress', 'pending_acknowledgement',
   'pending_payroll', 'completed', 'cancelled',
 ];
 const OPEN_STATUSES = STATUSES.filter((s) => s !== 'completed' && s !== 'cancelled');
 
 const STATUS_LABELS = {
   invited: 'Invited',
+  pending_hr_signoff: 'Waiting for HR sign-off',
   clearance_in_progress: 'Clearance in progress',
   pending_acknowledgement: 'Pending acknowledgement',
   pending_payroll: 'Pending payroll',
@@ -38,4 +39,10 @@ const REMINDER_WINDOWS = [
 const TOTAL_SECTIONS = 6;
 const REPORTING_UNIT_ID = 1;
 
-module.exports = { STATUSES, OPEN_STATUSES, STATUS_LABELS, EXIT_REASONS, REMINDER_WINDOWS, TOTAL_SECTIONS, REPORTING_UNIT_ID };
+// Department clearance and payroll steps (3 Nov 2026: switched off for now).
+// New cases follow the "HR only" flow — Exit Interview, then HR signs
+// Section D and the case is complete — unless OFFBOARDING_CLEARANCE=on.
+const clearanceOn = () => /^(1|on|true|yes)$/i.test(process.env.OFFBOARDING_CLEARANCE || '');
+const newCaseFlow = () => (clearanceOn() ? 'full' : 'hr_only');
+
+module.exports = { clearanceOn, newCaseFlow, STATUSES, OPEN_STATUSES, STATUS_LABELS, EXIT_REASONS, REMINDER_WINDOWS, TOTAL_SECTIONS, REPORTING_UNIT_ID };
