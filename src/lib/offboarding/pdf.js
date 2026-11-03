@@ -13,7 +13,12 @@
 const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
-const { EXIT_REASONS } = require('./constants');
+const exitReasons = require('./reasons');
+const businessUnits = require('../businessUnits');
+
+async function unitName(code) {
+  try { return (await businessUnits.nameMap())[code] || code; } catch (e) { return code; }
+}
 
 const LOGO = path.join(__dirname, '..', '..', '..', 'assets', 'wct-logo.png');
 const LEFT = 50;
@@ -109,11 +114,16 @@ function writer(doc) {
   return w;
 }
 
-function exitInterviewPdf(bundle) {
+async function exitInterviewPdf(bundle) {
   const c = bundle.case;
   const ei = bundle.exitInterview || {};
   const chosen = new Set(Array.isArray(ei.reasons) ? ei.reasons : []);
   const others = Array.isArray(ei.reasons_other) ? ei.reasons_other.filter(Boolean) : [];
+  // HR's current reason list, plus any ticked reason HR has since renamed or
+  // removed, so the form shows exactly what the employee chose.
+  const current = await exitReasons.labels();
+  const REASONS = [...current, ...[...chosen].filter((r) => !current.includes(r))];
+  const bu = await unitName(c.business_unit);
 
   return render((doc) => {
     const w = writer(doc);
@@ -122,19 +132,23 @@ function exitInterviewPdf(bundle) {
     w.bar('A: EMPLOYEE DETAILS');
     w.pair('Name (as per NRIC):', c.employee_name, 'Position:', c.position);
     w.pair('Immediate Superior:', c.immediate_superior_name, 'Dept/Site:', c.department);
-    w.pair('Date Joined:', fmt(c.date_joined), 'Notice Period:', c.notice_period_days != null ? `${c.notice_period_days} days` : '');
-    w.pair('Official Last Day:', fmt(c.official_last_day), 'Actual Last Day:', fmt(c.actual_last_day));
-    w.pair('Company:', c.company_name, 'Business Unit:', c.business_unit);
+    w.pair('Date Joined:', fmt(c.date_joined), 'Company:', c.company_name);
+    // Both dates are set by HR; the physical date may be earlier.
+    w.ensure(20);
+    w.field(LEFT, 'Official Last Employment Date:', fmt(c.official_last_day), 128, 117);
+    w.field(305, 'Physical Last Working Date:', fmt(c.actual_last_day), 118, 122);
+    w.y += 18;
+    w.pair('Business Unit:', bu, '', '');
     w.y += 8;
 
     w.bar('B: PLEASE INDICATE REASON(S) BELOW, WHICH CONTRIBUTED TO YOUR DECISION TO RESIGN');
     // Two columns in the paper form's reading order (reasons 1,3,5.. left).
-    for (let i = 0; i < EXIT_REASONS.length; i += 2) {
+    for (let i = 0; i < REASONS.length; i += 2) {
       w.ensure(18);
       const rowY = w.y;
-      w.checkbox(LEFT + 4, EXIT_REASONS[i], chosen.has(EXIT_REASONS[i]));
+      w.checkbox(LEFT + 4, REASONS[i], chosen.has(REASONS[i]));
       w.y = rowY;
-      w.checkbox(305, EXIT_REASONS[i + 1], chosen.has(EXIT_REASONS[i + 1]));
+      if (REASONS[i + 1]) w.checkbox(305, REASONS[i + 1], chosen.has(REASONS[i + 1]));
       w.y = rowY + 17;
     }
     w.ensure(18);
@@ -169,7 +183,8 @@ function exitInterviewPdf(bundle) {
   });
 }
 
-function clearancePdf(bundle) {
+async function clearancePdf(bundle) {
+  const bu = await unitName(bundle.case.business_unit);
   const c = bundle.case;
   return render((doc) => {
     const w = writer(doc);
@@ -178,7 +193,7 @@ function clearancePdf(bundle) {
       c.ref_no);
 
     w.pair('Name (as per NRIC):', c.employee_name, 'Position:', c.position);
-    w.pair('Dept/Site:', c.department, 'Business Unit:', c.business_unit);
+    w.pair('Dept/Site:', c.department, 'Business Unit:', bu);
     w.pair('Date Joined:', fmt(c.date_joined), 'Last Working Day:', fmt(c.actual_last_day || c.official_last_day));
     w.y += 8;
 
