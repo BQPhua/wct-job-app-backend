@@ -19,7 +19,7 @@ let pa;
 async function invite(email, extra = {}) {
   const res = await request().post('/api/admin/offboarding/cases').set('Authorization', HR).send({
     employee_email: email, employee_name: 'Aina Binti Ali', business_unit: 'Land',
-    position: 'Engineer', department: 'Construction', date_joined: '2021-01-04', ...extra,
+    position: 'Engineer', department: 'Construction', date_joined: '2021-01-04', official_last_day: '2026-12-10', actual_last_day: '2026-12-10', ...extra,
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
   const { rows } = await db().query('SELECT * FROM offboarding_cases WHERE id = $1', [res.body.case.id]);
@@ -59,8 +59,7 @@ describe('HR-only offboarding', () => {
     assert.equal((await emp('post', '/claim', who.token, { token: c.invite_token })).status, 200);
     pa.reset();
     const res = await emp('post', `/mine/${c.id}/exit-interview/submit`, who.token, {
-      notice_period_days: 30, official_last_day: '2026-12-10', actual_last_day: '2026-12-10',
-      reasons: ['Better Offer'], comments: 'Thanks', signature_name: 'Aina Binti Ali', declaration: true,
+            reasons: ['Better Offer'], comments: 'Thanks', signature_name: 'Aina Binti Ali', declaration: true,
     });
     assert.equal(res.status, 200, JSON.stringify(res.body));
     assert.equal(res.body.case.status, 'pending_hr_signoff');
