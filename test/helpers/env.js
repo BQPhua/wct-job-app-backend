@@ -13,3 +13,7 @@ process.env.JWT_SECRET = 'test';
 process.env.ADMIN_JWT_SECRET = 'test-admin';
 process.env.OFFBOARDING_CRON_SECRET = 'cron-test';
 process.env.FRONTEND_BASE_URL = 'http://fe.test';
+// The existing offboarding tests cover the full flow (department clearance
+// and payroll). The HR-only flow (the live default since 3 Nov 2026) is
+// covered by test/offboardingHrOnly.test.js, which switches this off.
+if (!process.env.E2E_DB && process.env.OFFBOARDING_CLEARANCE === undefined) process.env.OFFBOARDING_CLEARANCE = 'on';
