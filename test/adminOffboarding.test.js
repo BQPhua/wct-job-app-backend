@@ -33,7 +33,7 @@ async function invite(auth = HR_LAND, over = {}) {
   const res = await api('post', '/cases', auth, {
     employee_email: `leaver${n}@wct.my`, employee_name: `Leaver ${n}`, business_unit: 'Land',
     company_name: 'WCT Land Sdn Bhd', department: 'Construction', position: 'Engineer', date_joined: '2022-03-01',
-    immediate_superior_name: 'Sue', immediate_superior_email: 'superior@wct.my', official_last_day: '2026-12-31', ...over,
+    immediate_superior_name: 'Sue', immediate_superior_email: 'superior@wct.my', official_last_day: '2026-12-31', actual_last_day: '2026-12-31', ...over,
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
   return res.body.case;
@@ -122,15 +122,20 @@ describe('invite', () => {
     assert.equal(bad.status, 400);
     const same = await api('post', '/cases', HR_LAND, { employee_email: 's@wct.my', employee_name: 'S', business_unit: 'Land', immediate_superior_email: 's@wct.my' });
     assert.equal(same.status, 400);
-    const noSup = await api('post', '/cases', HR_LAND, { employee_email: 'nosup@wct.my', employee_name: 'N', business_unit: 'Land' });
+    const noSup = await api('post', '/cases', HR_LAND, { employee_email: 'nosup@wct.my', employee_name: 'N', business_unit: 'Land', official_last_day: '2026-12-31', actual_last_day: '2026-12-31' });
     assert.equal(noSup.status, 400);
     assert.match(noSup.body.error, /superior email is required/i);
+    // HR sets both dates (3 Nov 2026); the physical date may be earlier.
+    const noDates = await api('post', '/cases', HR_LAND, { employee_email: 'nodates@wct.my', employee_name: 'D', business_unit: 'Land',
+      immediate_superior_email: 'boss@wct.my' });
+    assert.equal(noDates.status, 400);
+    assert.match(noDates.body.error, /Official Last Employment Date is required/);
     const early = await api('post', '/cases', HR_LAND, { employee_email: 'early@wct.my', employee_name: 'E', business_unit: 'Land',
       immediate_superior_email: 'boss@wct.my', official_last_day: '2026-12-31', actual_last_day: '2026-12-30' });
-    assert.equal(early.status, 400);
-    assert.match(early.body.error, /cannot be before the official last day/);
+    assert.equal(early.status, 201, JSON.stringify(early.body));
     await invite(HR_LAND, { employee_email: 'dup@wct.my' });
-    const dup = await api('post', '/cases', HR_LAND, { employee_email: 'DUP@wct.my', employee_name: 'Dup', business_unit: 'Land', immediate_superior_email: 'boss@wct.my' });
+    const dup = await api('post', '/cases', HR_LAND, { employee_email: 'DUP@wct.my', employee_name: 'Dup', business_unit: 'Land', immediate_superior_email: 'boss@wct.my',
+      official_last_day: '2026-12-31', actual_last_day: '2026-12-31' });
     assert.equal(dup.status, 409);
   });
 });
@@ -220,9 +225,10 @@ describe('case detail and edits', () => {
     const again = await api('patch', `/cases/${b.case.id}`, HR_LAND, { immediate_superior_email: 'third@wct.my' });
     assert.equal(again.body.sections.find((s) => s.department_id === 1).assignee_email, 'newboss@wct.my');
     assert.equal((await api('patch', `/cases/${b.case.id}`, IT_LAND, { position: 'x' })).status, 403);
-    // actual (2026-12-31) can't move before official, and official can't move past actual
-    assert.equal((await api('patch', `/cases/${b.case.id}`, HR_LAND, { actual_last_day: '2026-12-30' })).status, 400);
-    assert.equal((await api('patch', `/cases/${b.case.id}`, HR_LAND, { official_last_day: '2027-01-05' })).status, 400);
+    // The physical working date may be earlier than the official employment date; neither can be cleared.
+    assert.equal((await api('patch', `/cases/${b.case.id}`, HR_LAND, { actual_last_day: '2026-12-30' })).status, 200);
+    assert.equal((await api('patch', `/cases/${b.case.id}`, HR_LAND, { official_last_day: '2027-01-05' })).status, 200);
+    assert.equal((await api('patch', `/cases/${b.case.id}`, HR_LAND, { actual_last_day: '' })).status, 400);
     assert.equal((await api('patch', `/cases/${b.case.id}`, HR_LAND, { official_last_day: '2026-12-31' })).status, 200);
     assert.equal((await api('patch', `/cases/${b.case.id}`, HR_LAND, { immediate_superior_email: '' })).status, 400);
   });
