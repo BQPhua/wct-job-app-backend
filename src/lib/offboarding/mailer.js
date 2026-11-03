@@ -23,6 +23,7 @@ const db = require('../../db');
 const { sendOffboardingEmail } = require('../powerAutomate');
 const { getBuAdminEmails } = require('../notificationHelpers');
 const pdf = require('./pdf');
+const businessUnits = require('../businessUnits');
 
 const frontend = () => process.env.FRONTEND_BASE_URL || 'https://hrforms.wct.my';
 const employeeLink = (c) => `${frontend()}/index.html?offboard=${encodeURIComponent(c.invite_token)}`;
@@ -145,8 +146,9 @@ const caseRows = (c, extra = []) => [
   ['Employee', c.employee_name],
   ['Position', c.position || '—'],
   ['Department', c.department || '—'],
-  ['Business unit', c.business_unit],
-  ['Last working day', fmtDate(lastDay(c))],
+  ['Business unit', c.business_unit_name || c.business_unit],
+  ['Official Last Employment Date', fmtDate(c.official_last_day)],
+  ['Physical Last Working Date', fmtDate(c.actual_last_day)],
   ...extra,
 ];
 
@@ -309,8 +311,12 @@ async function post(eventType, bundle, content, to, cc, attachments = [], extraF
   return sendOffboardingEmail(payload);
 }
 
-async function send(eventType, bundle, extra = {}) {
+async function send(eventType, bundleIn, extra = {}) {
   try {
+    // Show the unit's name ("Property Development"), not its code ("Land").
+    let unitName = bundleIn.case.business_unit;
+    try { unitName = (await businessUnits.nameMap())[unitName] || unitName; } catch (e) { /* keep the code */ }
+    const bundle = { ...bundleIn, case: { ...bundleIn.case, business_unit_name: unitName } };
     const tpl = TEMPLATES[eventType];
     if (!tpl) throw new Error(`Unknown offboarding email type "${eventType}"`);
 
