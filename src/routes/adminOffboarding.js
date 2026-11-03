@@ -25,7 +25,7 @@ const lifecycle = require('../lib/offboarding/lifecycle');
 const mailer = require('../lib/offboarding/mailer');
 const pdf = require('../lib/offboarding/pdf');
 const dates = require('../lib/offboarding/dates');
-const { STATUSES, STATUS_LABELS, OPEN_STATUSES, EXIT_REASONS, TOTAL_SECTIONS } = require('../lib/offboarding/constants');
+const { STATUSES, STATUS_LABELS, OPEN_STATUSES, EXIT_REASONS, TOTAL_SECTIONS, clearanceOn, newCaseFlow } = require('../lib/offboarding/constants');
 
 const router = express.Router();
 router.use(requireAdminAuth);
@@ -87,6 +87,7 @@ const effectiveLastDay = (c) => c.actual_last_day || c.official_last_day || null
 function waitingOn(row, pendingDepartments) {
   switch (row.status) {
     case 'invited': return 'Employee — Exit Interview';
+    case 'pending_hr_signoff': return 'HR — Section D sign-off';
     case 'clearance_in_progress': return pendingDepartments && pendingDepartments.length ? pendingDepartments.join(', ') : 'Clearance';
     case 'pending_acknowledgement': return 'Employee — Acknowledgement';
     case 'pending_payroll': return 'Payroll';
@@ -112,7 +113,7 @@ function present(req, bundle) {
       effective_last_day: effectiveLastDay(c),
       status_label: STATUS_LABELS[c.status],
       sections_signed: bundle.sections.filter((s) => s.status === 'complete').length,
-      sections_total: TOTAL_SECTIONS,
+      sections_total: c.flow === 'hr_only' ? 0 : TOTAL_SECTIONS,
     },
     exitInterview: canReadInterview ? bundle.exitInterview : null,
     exit_interview_submitted: submitted,
@@ -136,7 +137,7 @@ function present(req, bundle) {
       view_exit_interview: canReadInterview,
       payroll_done: access.isPayrollFor(a, c.business_unit) && c.status === 'pending_payroll',
       pdf_exit_interview: submitted && canReadInterview,
-      pdf_clearance: ['pending_payroll', 'completed'].includes(c.status),
+      pdf_clearance: c.flow !== 'hr_only' && ['pending_payroll', 'completed'].includes(c.status),
     },
   };
   if (hr) out.invite_link = `${frontend()}/index.html?offboard=${encodeURIComponent(token)}`;
@@ -171,6 +172,7 @@ router.get('/meta', handle(async (req, res) => {
     departments: depts.rows,
     reasons: EXIT_REASONS,
     statuses: STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] })),
+    clearance_enabled: clearanceOn(), // false: new cases skip department clearance and payroll
     roles: a.roles,
     unit_scope: a.unitScope,
     email: a.email,
@@ -228,7 +230,7 @@ const SORTS = {
   last_day: 'COALESCE(c.actual_last_day, c.official_last_day)',
   created: 'c.created_at',
   name: 'lower(c.employee_name)',
-  status: `array_position(ARRAY['invited','clearance_in_progress','pending_acknowledgement','pending_payroll','completed','cancelled'], c.status)`,
+  status: `array_position(ARRAY['invited','pending_hr_signoff','clearance_in_progress','pending_acknowledgement','pending_payroll','completed','cancelled'], c.status)`,
   ref: 'c.ref_no',
 };
 
@@ -252,9 +254,14 @@ function mineSql(a, push) {
     parts.push(`EXISTS (SELECT 1 FROM offboarding_clearance_sections sa
                 WHERE sa.case_id = c.id AND sa.status = 'pending' AND lower(sa.assignee_email) = ${push(email)})`);
   }
+  // HR: Exit Interviews waiting for their Section D sign-off (HR-only flow).
+  if (a.unitScope !== 'SUPERIOR' && access.isHr(a)) {
+    parts.push(access.isSuper(a) ? "c.status = 'pending_hr_signoff'"
+      : `(c.status = 'pending_hr_signoff' AND c.business_unit = ${push(a.unitScope)})`);
+  }
   if (!parts.length) return 'FALSE';
   const own = email ? ` AND lower(c.employee_email) <> ${push(email)}` : '';
-  return `((${parts.join(' OR ')})${own} AND c.status IN ('clearance_in_progress', 'pending_payroll'))`;
+  return `((${parts.join(' OR ')})${own} AND c.status IN ('pending_hr_signoff', 'clearance_in_progress', 'pending_payroll'))`;
 }
 
 function buildListQuery(req) {
@@ -331,10 +338,11 @@ async function listCases(req, { all = false } = {}) {
   const countsQ = db.query(
     `SELECT
         count(*) FILTER (WHERE c.status = 'invited')::int AS invited,
+        count(*) FILTER (WHERE c.status = 'pending_hr_signoff')::int AS pending_hr_signoff,
         count(*) FILTER (WHERE c.status = 'clearance_in_progress')::int AS clearance_in_progress,
         count(*) FILTER (WHERE c.status = 'pending_acknowledgement')::int AS pending_acknowledgement,
         count(*) FILTER (WHERE c.status = 'pending_payroll')::int AS pending_payroll,
-        count(*) FILTER (WHERE c.status = 'completed' AND (c.payroll_completed_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= ${cPush(monthStart)})::int AS completed_this_month,
+        count(*) FILTER (WHERE c.status = 'completed' AND (COALESCE(c.completed_at, c.payroll_completed_at) AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= ${cPush(monthStart)})::int AS completed_this_month,
         count(*) FILTER (WHERE c.status NOT IN ('completed','cancelled') AND COALESCE(c.actual_last_day, c.official_last_day) < ${cPush(today)})::int AS overdue,
         count(*) FILTER (WHERE c.status NOT IN ('completed','cancelled') AND COALESCE(c.actual_last_day, c.official_last_day) BETWEEN ${cPush(today)} AND ${cPush(dates.addDays(today, 7))})::int AS due_7d,
         count(*) FILTER (WHERE ${mine})::int AS mine
@@ -354,7 +362,7 @@ async function listCases(req, { all = false } = {}) {
       return {
         ...rest,
         status_label: STATUS_LABELS[r.status],
-        sections_total: TOTAL_SECTIONS,
+        sections_total: r.flow === 'hr_only' ? 0 : TOTAL_SECTIONS,
         pending_departments: pend || [],
         waiting_on: waitingOn(r, pend),
         overdue: !!(open && eff && eff < today),
@@ -384,7 +392,7 @@ router.get('/cases/export.csv', handle(async (req, res) => {
     'Acknowledged at', 'Payroll completed at', 'Cancel reason'];
   const lines = [header.join(',')].concat(data.rows.map((r) => [
     r.ref_no, r.employee_name, r.employee_email, r.business_unit, r.company_name, r.department, r.position, r.date_joined,
-    r.official_last_day, r.actual_last_day, r.status_label, `${r.sections_signed}/${TOTAL_SECTIONS}`, r.waiting_on,
+    r.official_last_day, r.actual_last_day, r.status_label, r.flow === 'hr_only' ? 'n/a' : `${r.sections_signed}/${TOTAL_SECTIONS}`, r.waiting_on,
     r.invited_at && new Date(r.invited_at).toISOString(), r.submitted_at && new Date(r.submitted_at).toISOString(),
     r.acknowledged_at && new Date(r.acknowledged_at).toISOString(),
     r.payroll_completed_at && new Date(r.payroll_completed_at).toISOString(), r.cancel_reason,
@@ -400,7 +408,7 @@ router.get('/cases/export.csv', handle(async (req, res) => {
 const EDITABLE = ['employee_name', 'company_name', 'department', 'position', 'date_joined', 'immediate_superior_name',
   'immediate_superior_email', 'notice_period_days', 'official_last_day', 'actual_last_day'];
 
-function validateDetails(input, { creating }) {
+function validateDetails(input, { creating, requireSuperior = true }) {
   const out = {};
   for (const k of EDITABLE) {
     if (!(k in input)) continue;
@@ -419,8 +427,8 @@ function validateDetails(input, { creating }) {
   if (creating && !out.employee_name) fail(400, 'Employee name is required');
   if ('employee_name' in out && !out.employee_name) fail(400, 'Employee name is required');
   // The immediate superior IS the Reporting Unit: they sign that checklist,
-  // so every case needs one (no Reporting Unit PIC grants any more).
-  if ((creating || 'immediate_superior_email' in out) && !out.immediate_superior_email) {
+  // so every full-flow case needs one. HR-only cases have no checklists.
+  if (requireSuperior && (creating || 'immediate_superior_email' in out) && !out.immediate_superior_email) {
     fail(400, "Immediate superior email is required. The superior signs the employee's Reporting Unit clearance");
   }
   return out;
@@ -441,7 +449,7 @@ router.post('/cases', handle(async (req, res) => {
   const bu = access.isSuper(req.admin) ? body.business_unit : (body.business_unit || req.admin.unitScope);
   if (!bu || !(await businessUnits.isValid(bu))) fail(400, 'Business unit is required');
   if (!access.isHrFor(req.admin, bu)) fail(403, 'You can only invite people in your own business unit');
-  const details = validateDetails(body, { creating: true });
+  const details = validateDetails(body, { creating: true, requireSuperior: clearanceOn() });
   checkLastDays(details.official_last_day, details.actual_last_day);
   if (details.immediate_superior_email && details.immediate_superior_email === email) {
     fail(400, "The immediate superior can't be the employee themselves");
@@ -465,9 +473,9 @@ router.post('/cases', handle(async (req, res) => {
     if (body.application_id && apps.rows[0] && apps.rows[0].id === body.application_id) applicationId = body.application_id;
     else if (apps.rows[0]) applicationId = apps.rows[0].id;
 
-    const cols = ['ref_no', 'invite_token', 'employee_email', 'business_unit', 'application_id', 'invited_by_email', ...Object.keys(details)];
+    const cols = ['ref_no', 'invite_token', 'employee_email', 'business_unit', 'application_id', 'invited_by_email', 'flow', ...Object.keys(details)];
     const vals = [await lifecycle.nextRefNo(client), crypto.randomBytes(32).toString('hex'), email, bu, applicationId,
-      lc(req.admin.email) || 'admin', ...Object.values(details)];
+      lc(req.admin.email) || 'admin', newCaseFlow(), ...Object.values(details)];
     const { rows } = await client.query(
       `INSERT INTO offboarding_cases (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')}) RETURNING *`,
       vals
@@ -494,7 +502,7 @@ router.patch('/cases/:id', handle(async (req, res) => {
     if (!access.isHrFor(req.admin, b.case.business_unit)) fail(403, 'Only HR can edit case details');
     requireNotOwnCase(req, b.case);
     if (!OPEN_STATUSES.includes(b.case.status)) fail(409, 'Closed cases can no longer be edited');
-    const details = validateDetails(body, { creating: false });
+    const details = validateDetails(body, { creating: false, requireSuperior: b.case.flow !== 'hr_only' });
     checkLastDays(
       'official_last_day' in details ? details.official_last_day : b.case.official_last_day,
       'actual_last_day' in details ? details.actual_last_day : b.case.actual_last_day
@@ -730,6 +738,7 @@ router.post('/cases/:id/hr-signoff', handle(async (req, res) => {
   const name = clean(req.body && req.body.name);
   const position = clean(req.body && req.body.position);
   if (!name || !position) fail(400, 'Name and position are required');
+  let closed = false;
   await db.withTransaction(async (client) => {
     const b = await lockedBundle(client, req);
     if (!access.isHrFor(req.admin, b.case.business_unit)) fail(403, 'Only HR can sign Section D');
@@ -743,7 +752,14 @@ router.post('/cases/:id/hr-signoff', handle(async (req, res) => {
       [b.case.id, name, position, clean(req.body.comments)]
     );
     await lifecycle.logEvent(client, b.case.id, req.admin, 'hr_signed', { name, position });
+    // HR-only flow: HR's signature closes the case.
+    if (b.case.status === 'pending_hr_signoff') {
+      await client.query("UPDATE offboarding_cases SET status = 'completed', completed_at = now() WHERE id = $1", [b.case.id]);
+      await lifecycle.logEvent(client, b.case.id, req.admin, 'completed', {});
+      closed = true;
+    }
   });
+  if (closed) await afterCommitEmail(req.params.id, req.admin, 'hr_signed');
   res.json(present(req, await visibleBundle(req)));
 }));
 
@@ -754,7 +770,7 @@ router.post('/cases/:id/payroll-done', handle(async (req, res) => {
     requireNotOwnCase(req, b.case);
     if (b.case.status !== 'pending_payroll') fail(409, 'Payroll can be marked done only after the employee has acknowledged');
     await client.query(
-      `UPDATE offboarding_cases SET status = 'completed', payroll_completed_at = now(), payroll_completed_by_email = $2, payroll_remarks = $3
+      `UPDATE offboarding_cases SET status = 'completed', completed_at = now(), payroll_completed_at = now(), payroll_completed_by_email = $2, payroll_remarks = $3
         WHERE id = $1`,
       [b.case.id, lc(req.admin.email) || 'admin', clean(req.body && req.body.remarks)]
     );
@@ -839,7 +855,7 @@ router.get('/analytics', handle(async (req, res) => {
               count(*) FILTER (WHERE status NOT IN ('completed','cancelled'))::int AS open,
               count(*) FILTER (WHERE status NOT IN ('completed','cancelled') AND last_day < $1::date)::int AS overdue,
               count(*) FILTER (WHERE status NOT IN ('completed','cancelled') AND last_day BETWEEN $1::date AND $1::date + 7)::int AS due_7d,
-              count(*) FILTER (WHERE status = 'completed' AND payroll_completed_at >= date_trunc('month', $1::date))::int AS completed_this_month
+              count(*) FILTER (WHERE status = 'completed' AND COALESCE(completed_at, payroll_completed_at) >= date_trunc('month', $1::date))::int AS completed_this_month
          FROM base`),
     access.isSuper(a) && scope === 'ALL'
       ? q(`SELECT u.bu AS business_unit, count(b.id)::int AS count
@@ -963,9 +979,22 @@ router.get('/my-tasks', handle(async (req, res) => {
       [access.isGroupPayroll(a) ? null : a.unitScope]
     );
   }
+  // HR: Exit Interviews waiting for Section D (HR-only flow).
+  let signoffs = { rows: [] };
+  if (a.unitScope !== 'SUPERIOR' && access.isHr(a)) {
+    signoffs = await db.query(
+      `SELECT id, ref_no, employee_name, business_unit, position, submitted_at,
+              COALESCE(actual_last_day, official_last_day) AS last_day
+         FROM offboarding_cases
+        WHERE status = 'pending_hr_signoff' AND ($1::text IS NULL OR business_unit = $1) AND lower(employee_email) <> $2
+        ORDER BY submitted_at NULLS LAST`,
+      [access.isSuper(a) ? null : a.unitScope, email]
+    );
+  }
   const withDays = (r) => ({ ...r, days_left: r.last_day ? dates.daysBetween(today, r.last_day) : null });
   const secRows = sections.rows.map(withDays).sort((x, y) => (x.days_left ?? 9999) - (y.days_left ?? 9999));
-  res.json({ sections: secRows, payroll: payroll.rows.map(withDays), count: secRows.length + payroll.rows.length });
+  res.json({ sections: secRows, payroll: payroll.rows.map(withDays), signoffs: signoffs.rows.map(withDays),
+    count: secRows.length + payroll.rows.length + signoffs.rows.length });
 }));
 
 module.exports = router;
