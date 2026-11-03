@@ -59,9 +59,11 @@ function present(bundle) {
       status_label: STATUS_LABELS[c.status],
       effective_last_day: c.actual_last_day || c.official_last_day || null,
       sections_signed: bundle.sections.filter((s) => s.status === 'complete').length,
-      sections_total: TOTAL_SECTIONS,
+      sections_total: c.flow === 'hr_only' ? 0 : TOTAL_SECTIONS,
     },
     exitInterview: bundle.exitInterview && {
+      hr_signed_at: bundle.exitInterview.hr_signed_at,
+      hr_signed_name: bundle.exitInterview.hr_signed_name,
       reasons: bundle.exitInterview.reasons,
       reasons_other: bundle.exitInterview.reasons_other,
       comments: bundle.exitInterview.comments,
@@ -188,6 +190,7 @@ router.patch('/mine/:id/exit-interview', requireCandidateAuth, handle(async (req
 
 router.post('/mine/:id/exit-interview/submit', requireCandidateAuth, handle(async (req, res) => {
   const body = req.body || {};
+  let submittedFlow = 'full';
   await db.withTransaction(async (client) => {
     const b = await ownBundle(req, client, { lock: true });
     if (b.case.status !== 'invited') fail(409, 'Your Exit Interview has already been submitted');
@@ -219,15 +222,19 @@ router.post('/mine/:id/exit-interview/submit', requireCandidateAuth, handle(asyn
       'UPDATE offboarding_exit_interviews SET employee_signature_name = $2, employee_signed_at = now() WHERE case_id = $1',
       [c.id, signature.slice(0, 200)]
     );
+    // HR-only flow (3 Nov 2026): the Exit Interview goes straight to HR for
+    // Section D. Full flow: the six department checklists start.
+    const hrOnly = c.flow === 'hr_only';
     const { rows } = await client.query(
-      "UPDATE offboarding_cases SET status = 'clearance_in_progress', submitted_at = now() WHERE id = $1 RETURNING *",
-      [c.id]
+      'UPDATE offboarding_cases SET status = $2, submitted_at = now() WHERE id = $1 RETURNING *',
+      [c.id, hrOnly ? 'pending_hr_signoff' : 'clearance_in_progress']
     );
-    await lifecycle.createSections(client, rows[0]);
+    if (!hrOnly) await lifecycle.createSections(client, rows[0]);
     await lifecycle.logEvent(client, c.id, employeeActor(req), 'interview_submitted', {});
+    submittedFlow = c.flow;
   });
   await emailAfterCommit(req.params.id, req, 'submitted_hr');
-  await emailAfterCommit(req.params.id, req, 'clearance_task');
+  if (submittedFlow !== 'hr_only') await emailAfterCommit(req.params.id, req, 'clearance_task');
   res.json(present(await ownBundle(req)));
 }));
 
