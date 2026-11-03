@@ -25,7 +25,8 @@ const lifecycle = require('../lib/offboarding/lifecycle');
 const mailer = require('../lib/offboarding/mailer');
 const pdf = require('../lib/offboarding/pdf');
 const dates = require('../lib/offboarding/dates');
-const { STATUSES, STATUS_LABELS, OPEN_STATUSES, EXIT_REASONS, TOTAL_SECTIONS, clearanceOn, newCaseFlow } = require('../lib/offboarding/constants');
+const { STATUSES, STATUS_LABELS, OPEN_STATUSES, TOTAL_SECTIONS, clearanceOn, newCaseFlow } = require('../lib/offboarding/constants');
+const exitReasons = require('../lib/offboarding/reasons');
 
 const router = express.Router();
 router.use(requireAdminAuth);
@@ -159,18 +160,19 @@ async function afterCommitEmail(caseId, actor, eventType, extra = {}) {
 router.get('/meta', handle(async (req, res) => {
   const a = req.admin;
   const all = access.seesAllUnits(a);
-  const [depts, companies, units] = await Promise.all([
+  const [depts, companies, units, reasonRows] = await Promise.all([
     db.query('SELECT id, name, is_reporting_unit FROM clearance_departments ORDER BY display_order'),
     db.query(
       `SELECT name, business_unit FROM companies ${all ? '' : 'WHERE business_unit = $1'} ORDER BY name`,
       all ? [] : [a.unitScope]
     ),
     businessUnits.list(),
+    exitReasons.list(),
   ]);
   const codes = units.map((u) => u.code);
   res.json({
     departments: depts.rows,
-    reasons: EXIT_REASONS,
+    reasons: reasonRows.map((r) => r.label),
     statuses: STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] })),
     clearance_enabled: clearanceOn(), // false: new cases skip department clearance and payroll
     roles: a.roles,
@@ -388,7 +390,7 @@ router.get('/cases/export.csv', handle(async (req, res) => {
   if (!access.isHr(req.admin) && !req.admin.roles.payroll_pic) fail(403, 'Only HR and Payroll can export');
   const data = await listCases(req, { all: true });
   const header = ['Reference', 'Employee', 'Email', 'Business unit', 'Company', 'Department', 'Position', 'Date joined',
-    'Official last day', 'Actual last day', 'Status', 'Sections signed', 'Waiting on', 'Invited at', 'Submitted at',
+    'Official Last Employment Date', 'Physical Last Working Date', 'Status', 'Sections signed', 'Waiting on', 'Invited at', 'Submitted at',
     'Acknowledged at', 'Payroll completed at', 'Cancel reason'];
   const lines = [header.join(',')].concat(data.rows.map((r) => [
     r.ref_no, r.employee_name, r.employee_email, r.business_unit, r.company_name, r.department, r.position, r.date_joined,
@@ -405,8 +407,11 @@ router.get('/cases/export.csv', handle(async (req, res) => {
 // ---------------------------------------------------------------------------
 // Invite / detail / edit
 // ---------------------------------------------------------------------------
+// official_last_day = Official Last Employment Date, actual_last_day =
+// Physical Last Working Date: both set by HR (3 Nov 2026). The physical date
+// may be earlier than the official one. Notice period is no longer asked.
 const EDITABLE = ['employee_name', 'company_name', 'department', 'position', 'date_joined', 'immediate_superior_name',
-  'immediate_superior_email', 'notice_period_days', 'official_last_day', 'actual_last_day'];
+  'immediate_superior_email', 'official_last_day', 'actual_last_day'];
 
 function validateDetails(input, { creating, requireSuperior = true }) {
   const out = {};
@@ -418,13 +423,12 @@ function validateDetails(input, { creating, requireSuperior = true }) {
       if (!EMAIL_RE.test(v)) fail(400, 'Immediate superior email is not a valid email address');
     }
     if (['date_joined', 'official_last_day', 'actual_last_day'].includes(k) && v && !dates.isIsoDate(v)) fail(400, `${k} must be a date (YYYY-MM-DD)`);
-    if (k === 'notice_period_days' && v != null) {
-      v = Number(v);
-      if (!Number.isInteger(v) || v < 0) fail(400, 'Notice period must be a whole number of days');
-    }
     out[k] = v;
   }
   if (creating && !out.employee_name) fail(400, 'Employee name is required');
+  for (const [k, label] of [['official_last_day', 'Official Last Employment Date'], ['actual_last_day', 'Physical Last Working Date']]) {
+    if ((creating || k in out) && !out[k]) fail(400, `${label} is required`);
+  }
   if ('employee_name' in out && !out.employee_name) fail(400, 'Employee name is required');
   // The immediate superior IS the Reporting Unit: they sign that checklist,
   // so every full-flow case needs one. HR-only cases have no checklists.
@@ -432,13 +436,6 @@ function validateDetails(input, { creating, requireSuperior = true }) {
     fail(400, "Immediate superior email is required. The superior signs the employee's Reporting Unit clearance");
   }
   return out;
-}
-
-/** Actual last day may not be earlier than the official last day. */
-function checkLastDays(official, actual) {
-  if (official && actual && String(actual).slice(0, 10) < String(official).slice(0, 10)) {
-    fail(400, 'Actual last day cannot be before the official last day');
-  }
 }
 
 router.post('/cases', handle(async (req, res) => {
@@ -450,7 +447,6 @@ router.post('/cases', handle(async (req, res) => {
   if (!bu || !(await businessUnits.isValid(bu))) fail(400, 'Business unit is required');
   if (!access.isHrFor(req.admin, bu)) fail(403, 'You can only invite people in your own business unit');
   const details = validateDetails(body, { creating: true, requireSuperior: clearanceOn() });
-  checkLastDays(details.official_last_day, details.actual_last_day);
   if (details.immediate_superior_email && details.immediate_superior_email === email) {
     fail(400, "The immediate superior can't be the employee themselves");
   }
@@ -503,10 +499,6 @@ router.patch('/cases/:id', handle(async (req, res) => {
     requireNotOwnCase(req, b.case);
     if (!OPEN_STATUSES.includes(b.case.status)) fail(409, 'Closed cases can no longer be edited');
     const details = validateDetails(body, { creating: false, requireSuperior: b.case.flow !== 'hr_only' });
-    checkLastDays(
-      'official_last_day' in details ? details.official_last_day : b.case.official_last_day,
-      'actual_last_day' in details ? details.actual_last_day : b.case.actual_last_day
-    );
 
     if (body.employee_email !== undefined && lc(body.employee_email) !== b.case.employee_email) {
       if (b.case.status !== 'invited' || b.case.employee_user_id) fail(409, 'The email can only change before the employee opens the invite');
@@ -817,6 +809,70 @@ router.get('/cases/:id/pdf/clearance', handle(async (req, res) => {
 // ---------------------------------------------------------------------------
 const DAYS = (a, b) => `EXTRACT(EPOCH FROM (${a} - ${b})) / 86400.0`;
 const round1 = (v) => (v == null ? null : Math.round(Number(v) * 10) / 10);
+
+// ---------------------------------------------------------------------------
+// Exit reasons setup (migration 013): the reasons employees can tick in the
+// Exit Interview. Any HR admin may add, rename, reorder or delete them.
+// Submitted forms keep their own text, so changes here never alter them.
+// ---------------------------------------------------------------------------
+function cleanReason(v) {
+  const t = clean(v);
+  if (!t) fail(400, 'Please enter the reason');
+  if (t.length > 120) fail(400, 'A reason can be at most 120 characters');
+  return t;
+}
+async function reasonsOut() { return { reasons: await exitReasons.list() }; }
+const dupReason = (err) => { if (err.code === '23505') fail(409, 'That reason is already on the list'); throw err; };
+
+router.get('/reasons', handle(async (req, res) => {
+  requireHr(req);
+  res.json(await reasonsOut());
+}));
+router.post('/reasons', handle(async (req, res) => {
+  requireHr(req);
+  const label = cleanReason(req.body && req.body.label);
+  await db.query(
+    'INSERT INTO offboarding_exit_reasons (label, display_order) SELECT $1, COALESCE(max(display_order), 0) + 1 FROM offboarding_exit_reasons',
+    [label]
+  ).catch(dupReason);
+  res.status(201).json(await reasonsOut());
+}));
+router.patch('/reasons/:reasonId', handle(async (req, res) => {
+  requireHr(req);
+  const id = Number(req.params.reasonId);
+  if (!Number.isInteger(id)) fail(404, 'Reason not found');
+  const body = req.body || {};
+  const { rows } = await db.query('SELECT * FROM offboarding_exit_reasons WHERE id = $1', [id]);
+  if (!rows.length) fail(404, 'Reason not found');
+  if (body.label !== undefined) {
+    await db.query('UPDATE offboarding_exit_reasons SET label = $2, updated_at = now() WHERE id = $1', [id, cleanReason(body.label)]).catch(dupReason);
+  }
+  if (body.move === 'up' || body.move === 'down') {
+    // Swap with the neighbour above or below.
+    const list = await exitReasons.list();
+    const i = list.findIndex((r) => r.id === id);
+    const j = body.move === 'up' ? i - 1 : i + 1;
+    if (j >= 0 && j < list.length) {
+      await db.withTransaction(async (client) => {
+        const order = list.map((r) => r.id);
+        [order[i], order[j]] = [order[j], order[i]];
+        for (let k = 0; k < order.length; k += 1) {
+          // eslint-disable-next-line no-await-in-loop
+          await client.query('UPDATE offboarding_exit_reasons SET display_order = $2 WHERE id = $1', [order[k], k + 1]);
+        }
+      });
+    }
+  }
+  res.json(await reasonsOut());
+}));
+router.delete('/reasons/:reasonId', handle(async (req, res) => {
+  requireHr(req);
+  const { rows } = await db.query('SELECT count(*)::int AS n FROM offboarding_exit_reasons');
+  if (rows[0].n <= 1) fail(409, 'Keep at least one reason on the list');
+  const del = await db.query('DELETE FROM offboarding_exit_reasons WHERE id = $1', [Number(req.params.reasonId) || 0]);
+  if (!del.rowCount) fail(404, 'Reason not found');
+  res.json(await reasonsOut());
+}));
 
 router.get('/analytics', handle(async (req, res) => {
   requireHr(req);
