@@ -21,7 +21,8 @@ const lifecycle = require('../lib/offboarding/lifecycle');
 const mailer = require('../lib/offboarding/mailer');
 const pdf = require('../lib/offboarding/pdf');
 const dates = require('../lib/offboarding/dates');
-const { EXIT_REASONS, STATUS_LABELS, TOTAL_SECTIONS } = require('../lib/offboarding/constants');
+const { STATUS_LABELS, TOTAL_SECTIONS } = require('../lib/offboarding/constants');
+const exitReasons = require('../lib/offboarding/reasons');
 
 const router = express.Router();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -51,7 +52,8 @@ function maskEmail(email) {
 const employeeActor = (req) => ({ kind: 'employee', email: lc(req.user.email) });
 
 /** Employee's view of a case: no token, no internal ids of other staff. */
-function present(bundle) {
+async function present(bundle) {
+  const reasonOptions = await exitReasons.labels();
   const { invite_token: _t, invited_by_email: _i, cancelled_by_email: _c, payroll_completed_by_email: _p, ...c } = bundle.case;
   return {
     case: {
@@ -81,7 +83,7 @@ function present(bundle) {
         .filter((i) => !i.is_other || i.custom_text || i.is_checked || i.remarks)
         .map((i) => ({ item_text: i.is_other ? `Others${i.custom_text ? `: ${i.custom_text}` : ''}` : i.item_text, is_checked: i.is_checked, remarks: i.remarks })),
     })),
-    reasons: EXIT_REASONS,
+    reasons: reasonOptions,
     today: dates.todayMYT(),
   };
 }
@@ -99,20 +101,16 @@ async function emailAfterCommit(caseId, req, eventType) {
   if (!r.ok) await lifecycle.logEvent(db, caseId, employeeActor(req), 'email_failed', { email: eventType });
 }
 
-// Reusable field clean-up for draft saves and submit.
-function interviewPatch(body) {
+// Reusable field clean-up for draft saves and submit. The Official Last
+// Employment Date and Physical Last Working Date are set by HR (3 Nov 2026)
+// and the notice period is no longer asked, so the employee can't send them.
+// `options` = the reasons HR currently offers (Offboarding → Exit reasons).
+function interviewPatch(body, options) {
   const casePatch = {};
   const eiPatch = {};
   if ('immediate_superior_name' in body) casePatch.immediate_superior_name = clean(body.immediate_superior_name);
-  if ('notice_period_days' in body) {
-    const n = body.notice_period_days === '' || body.notice_period_days == null ? null : Number(body.notice_period_days);
-    casePatch.notice_period_days = n;
-  }
-  for (const k of ['official_last_day', 'actual_last_day']) {
-    if (k in body) casePatch[k] = dates.isIsoDate(body[k]) ? body[k] : null;
-  }
   if ('reasons' in body) {
-    eiPatch.reasons = JSON.stringify((Array.isArray(body.reasons) ? body.reasons : []).filter((r) => EXIT_REASONS.includes(r)));
+    eiPatch.reasons = JSON.stringify([...new Set((Array.isArray(body.reasons) ? body.reasons : []).filter((r) => options.includes(r)))]);
   }
   if ('reasons_other' in body) {
     eiPatch.reasons_other = (Array.isArray(body.reasons_other) ? body.reasons_other : [])
@@ -125,10 +123,6 @@ function interviewPatch(body) {
 async function applyPatch(client, caseId, { casePatch, eiPatch }) {
   const ck = Object.keys(casePatch);
   if (ck.length) {
-    if ('notice_period_days' in casePatch && casePatch.notice_period_days != null
-      && (!Number.isInteger(casePatch.notice_period_days) || casePatch.notice_period_days < 0)) {
-      fail(422, 'Notice period must be a whole number of days (0 or more)', { field: 'notice_period_days' });
-    }
     await client.query(`UPDATE offboarding_cases SET ${ck.map((k, i) => `${k} = $${i + 2}`).join(', ')} WHERE id = $1`,
       [caseId, ...ck.map((k) => casePatch[k])]);
   }
@@ -175,17 +169,17 @@ router.get('/mine', requireCandidateAuth, handle(async (req, res) => {
 }));
 
 router.get('/mine/:id', requireCandidateAuth, handle(async (req, res) => {
-  res.json(present(await ownBundle(req)));
+  res.json(await present(await ownBundle(req)));
 }));
 
 router.patch('/mine/:id/exit-interview', requireCandidateAuth, handle(async (req, res) => {
   await db.withTransaction(async (client) => {
     const b = await ownBundle(req, client, { lock: true });
     if (b.case.status !== 'invited') fail(409, 'Your Exit Interview has already been submitted and can no longer be changed');
-    await applyPatch(client, b.case.id, interviewPatch(req.body || {}));
+    await applyPatch(client, b.case.id, interviewPatch(req.body || {}, await exitReasons.labels(client)));
     await lifecycle.logEvent(client, b.case.id, employeeActor(req), 'interview_saved', {});
   });
-  res.json(present(await ownBundle(req)));
+  res.json(await present(await ownBundle(req)));
 }));
 
 router.post('/mine/:id/exit-interview/submit', requireCandidateAuth, handle(async (req, res) => {
@@ -194,22 +188,13 @@ router.post('/mine/:id/exit-interview/submit', requireCandidateAuth, handle(asyn
   await db.withTransaction(async (client) => {
     const b = await ownBundle(req, client, { lock: true });
     if (b.case.status !== 'invited') fail(409, 'Your Exit Interview has already been submitted');
-    await applyPatch(client, b.case.id, interviewPatch(body));
+    await applyPatch(client, b.case.id, interviewPatch(body, await exitReasons.labels(client)));
     const fresh = await lifecycle.loadBundle(client, b.case.id);
     const c = fresh.case;
     const ei = fresh.exitInterview;
-    const today = dates.todayMYT();
 
-    if (c.notice_period_days == null) fail(422, 'Please enter your notice period in days', { field: 'notice_period_days' });
-    if (!c.official_last_day) fail(422, 'Please enter your official last day', { field: 'official_last_day' });
-    const minOfficial = dates.addDays(today, c.notice_period_days);
-    if (c.official_last_day < minOfficial) {
-      fail(422, `With a ${c.notice_period_days}-day notice period, your official last day must be on or after ${minOfficial}`, { field: 'official_last_day' });
-    }
-    if (!c.actual_last_day) fail(422, 'Please enter your actual last day', { field: 'actual_last_day' });
-    if (c.actual_last_day < today) fail(422, 'Your actual last day cannot be in the past', { field: 'actual_last_day' });
-    if (c.actual_last_day < c.official_last_day) {
-      fail(422, 'Your actual last day cannot be before your official last day', { field: 'actual_last_day' });
+    if (!c.official_last_day || !c.actual_last_day) {
+      fail(409, 'HR has not set your Official Last Employment Date and Physical Last Working Date yet. Please contact HR.');
     }
     if ((ei.reasons || []).length === 0 && (ei.reasons_other || []).length === 0) {
       fail(422, 'Please choose at least one reason for leaving, or add your own', { field: 'reasons' });
@@ -235,7 +220,7 @@ router.post('/mine/:id/exit-interview/submit', requireCandidateAuth, handle(asyn
   });
   await emailAfterCommit(req.params.id, req, 'submitted_hr');
   if (submittedFlow !== 'hr_only') await emailAfterCommit(req.params.id, req, 'clearance_task');
-  res.json(present(await ownBundle(req)));
+  res.json(await present(await ownBundle(req)));
 }));
 
 router.post('/mine/:id/acknowledge', requireCandidateAuth, handle(async (req, res) => {
@@ -254,7 +239,7 @@ router.post('/mine/:id/acknowledge', requireCandidateAuth, handle(async (req, re
     await lifecycle.logEvent(client, b.case.id, employeeActor(req), 'acknowledged', {});
   });
   await emailAfterCommit(req.params.id, req, 'payroll_action');
-  res.json(present(await ownBundle(req)));
+  res.json(await present(await ownBundle(req)));
 }));
 
 router.get('/mine/:id/pdf/exit-interview', requireCandidateAuth, handle(async (req, res) => {
