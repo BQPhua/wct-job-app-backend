@@ -25,7 +25,7 @@ async function makeCase({ bu = 'Land', hr = bu === 'Land' ? HR_LAND : HR_MALL, j
   n += 1;
   const res = await request().post('/api/admin/offboarding/cases').set('Authorization', hr).send({
     employee_email: `an${n}@wct.my`, employee_name: `An ${n}`, business_unit: bu, department: dept, position: 'Engineer',
-    date_joined: joined, immediate_superior_email: 'superior@wct.my', official_last_day: lastDay,
+    date_joined: joined, immediate_superior_email: 'superior@wct.my', official_last_day: lastDay, actual_last_day: lastDay,
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
   const id = res.body.case.id;
