@@ -137,6 +137,7 @@ const EYEBROW = {
   invite_reminder: 'Exit Interview Reminder', ack_reminder: 'Acknowledgement Reminder',
   payroll_reminder: 'Final Pay Reminder',
   completed: 'Offboarding Completed', cancelled: 'Offboarding Cancelled',
+  hr_signed: 'Offboarding Completed', hr_signoff_reminder: 'Sign-off Reminder',
 };
 
 const caseRows = (c, extra = []) => [
@@ -159,12 +160,32 @@ const TEMPLATES = {
     button: { label: 'Open my offboarding', href: employeeLink(c) },
     note: 'Use this same email address to sign in (Microsoft sign-in is easiest for WCT staff). The link only works for you.',
   }),
-  submitted_hr: ({ case: c }) => ({
+  submitted_hr: ({ case: c }) => (c.flow === 'hr_only' ? {
+    subject: `Exit Interview submitted, please sign — ${c.employee_name} (${c.ref_no})`,
+    heading: 'Exit Interview ready for your sign-off',
+    intro: `${esc(c.employee_name)} has submitted their Exit Interview. Please review it and sign Section D (HR sign-off). Signing completes the offboarding and the employee will be notified.`,
+    rows: caseRows(c),
+    button: { label: 'Review and sign', href: staffLink(c) },
+  } : {
     subject: `Exit Interview submitted — ${c.employee_name} (${c.ref_no})`,
     heading: 'Exit Interview submitted',
     intro: `${esc(c.employee_name)} has submitted their Exit Interview. Department clearance has started and each department has been notified.`,
     rows: caseRows(c),
     button: { label: 'View case', href: staffLink(c) },
+  }),
+  hr_signed: ({ case: c, exitInterview: ei }) => ({
+    subject: `Your Exit Interview has been signed by HR (${c.ref_no})`,
+    heading: 'Your Exit Interview has been signed',
+    intro: `Dear ${esc(c.employee_name)},<br><br>HR has reviewed and signed your Exit Interview, and your offboarding with WCT is now complete. Thank you for your contributions, and we wish you all the best for what comes next.`,
+    rows: caseRows(c, [['Signed by HR', (ei && ei.hr_signed_name) || '—'], ['Signed on', fmtDate(ei && ei.hr_signed_at)]]),
+    button: { label: 'View or download my Exit Interview', href: employeeLink(c) },
+  }),
+  hr_signoff_reminder: ({ case: c }, extra) => ({
+    subject: `Reminder: Exit Interview waiting for your sign-off — ${c.employee_name} (${c.ref_no})`,
+    heading: 'Exit Interview waiting for HR sign-off',
+    intro: `${esc(c.employee_name)} submitted their Exit Interview${extra.daysSince != null ? ` <b>${esc(extra.daysSince)} day(s) ago</b>` : ''}. Please review it and sign Section D to complete the offboarding.`,
+    rows: caseRows(c),
+    button: { label: 'Review and sign', href: staffLink(c) },
   }),
   clearance_task: ({ case: c }, extra, s) => ({
     subject: `Exit clearance needed: ${s.department_name} — ${c.employee_name} (${c.ref_no})`,
@@ -232,7 +253,7 @@ const TEMPLATES = {
     subject: `Your offboarding is complete (${c.ref_no})`,
     heading: 'Offboarding complete',
     intro: `Dear ${esc(c.employee_name)},<br><br>Payroll has completed your final pay processing and your offboarding with WCT is now complete. Thank you for your contributions, and we wish you all the best.`,
-    rows: caseRows(c, [['Completed on', fmtDate(c.payroll_completed_at)]]),
+    rows: caseRows(c, [['Completed on', fmtDate(c.completed_at || c.payroll_completed_at)]]),
     button: { label: 'Download my forms', href: employeeLink(c) },
   }),
   cancelled: ({ case: c }) => ({
@@ -253,8 +274,10 @@ async function recipientsFor(eventType, bundle) {
   switch (eventType) {
     case 'invite': case 'invite_resent': case 'ready_to_ack': case 'invite_reminder': case 'ack_reminder':
       return { to: [c.employee_email], cc: [] };
-    case 'submitted_hr':
+    case 'submitted_hr': case 'hr_signoff_reminder':
       return { to: await hr(), cc: [] };
+    case 'hr_signed':
+      return { to: [c.employee_email], cc: [] };
     case 'payroll_action': {
       const pay = await roleEmails('payroll_pic', c.business_unit);
       const hrList = await hr();
