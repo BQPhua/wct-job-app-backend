@@ -23,7 +23,8 @@ let n = 0;
 async function invite(over = {}, auth = HR) {
   n += 1;
   const res = await api('post', '/cases', auth, {
-    employee_email: `rf${n}@wct.my`, employee_name: `RF ${n}`, business_unit: 'Land', immediate_superior_email: 'superior@wct.my', ...over,
+    employee_email: `rf${n}@wct.my`, employee_name: `RF ${n}`, business_unit: 'Land', immediate_superior_email: 'superior@wct.my',
+    official_last_day: '2026-12-20', actual_last_day: '2026-12-31', ...over,
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
   return res.body.case;
@@ -171,4 +172,3 @@ describe('upgraded minors', () => {
     verify.mock.restore();
   });
 });
-
