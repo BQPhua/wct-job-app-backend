@@ -103,7 +103,7 @@ describe('HR-only offboarding', () => {
 
   test('HR is reminded 2 days after an unsigned submission', async () => {
     const d = await invite('reminded@wct.my');
-    await db().query("UPDATE offboarding_cases SET status = 'pending_hr_signoff', submitted_at = now() - interval '2 days 1 hour' WHERE id = $1", [d.id]);
+    await db().query("UPDATE offboarding_cases SET status = 'pending_hr_signoff', submitted_at = ($2::date - 2) + time '09:00' WHERE id = $1", [d.id, TODAY]);
     const run = await request().post('/api/offboarding/cron/reminders').set('x-cron-key', 'cron-test');
     assert.equal(run.status, 200, JSON.stringify(run.body));
     await wait();
