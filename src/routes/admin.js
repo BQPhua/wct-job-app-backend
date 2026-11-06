@@ -52,25 +52,32 @@ function isSuperAdmin(admin) {
 }
 
 // ----------------------------------------------------------------------------
-// Onboarding details access (migration 014, 6 Nov 2026). Onboarding holds
-// sensitive data (EPF, tax, SOCSO, bank, family NRICs), so a Super Admin
-// decides per person whether an admin may see it. Read from the database on
-// every check, so turning it off takes effect at once (no new sign-in needed).
-// Super Admins always may. Before migration 014 is run the column is missing:
-// everyone keeps today's access.
+// Onboarding details access (migrations 014 + 015, 6 Nov 2026). Onboarding
+// holds sensitive data (EPF, tax, SOCSO, bank, family NRICs), so a Super Admin
+// decides per business unit, on each HR Admin grant, whether the person may
+// see it there. Read from the database on every check, so a change takes
+// effect at once (no new sign-in needed). Super Admins always may. Before
+// migration 015 is run the column is missing: everyone keeps today's access.
 // ----------------------------------------------------------------------------
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const NO_ONBOARDING_ACCESS = "You don't have access to onboarding details. Please ask a Super Admin if you need it.";
-const ONBOARDING_COLUMN_MISSING = '42703';
+const NO_ONBOARDING_ACCESS = "You don't have access to onboarding details in this business unit. Please ask a Super Admin if you need it.";
+const COLUMN_MISSING = '42703';
 
-async function canViewOnboarding(admin) {
+/** May this admin see onboarding details of `unit` (default: the unit they are working in)? */
+async function canViewOnboarding(admin, unit = admin.unitScope) {
   if (isSuperAdmin(admin)) return true;
-  if (!admin.adminUserId) return false;
+  if (!admin.adminUserId || !unit) return false;
   try {
-    const { rows } = await db.query('SELECT can_view_onboarding, is_active FROM admin_users WHERE id = $1', [admin.adminUserId]);
-    return !!(rows[0] && rows[0].is_active && rows[0].can_view_onboarding);
+    const { rows } = await db.query(
+      `SELECT 1 FROM admin_grants g JOIN admin_users u ON u.id = g.admin_user_id
+        WHERE g.admin_user_id = $1 AND g.role = 'bu_admin' AND g.business_unit = $2
+          AND g.can_view_onboarding AND u.is_active
+        LIMIT 1`,
+      [admin.adminUserId, unit]
+    );
+    return rows.length > 0;
   } catch (err) {
-    if (err.code === ONBOARDING_COLUMN_MISSING) return true;
+    if (err.code === COLUMN_MISSING) return true;
     throw err;
   }
 }
@@ -650,7 +657,7 @@ router.get('/applications/:id/other-bu', asyncHandler(async (req, res) => {
 router.get('/applications/:id/onboarding', asyncHandler(async (req, res) => {
   const app = await fetchScopedApplication(req, res);
   if (!app) return;
-  if (!(await canViewOnboarding(req.admin))) return res.status(403).json({ error: NO_ONBOARDING_ACCESS, code: 'no_onboarding_access' });
+  if (!(await canViewOnboarding(req.admin, app.business_unit))) return res.status(403).json({ error: NO_ONBOARDING_ACCESS, code: 'no_onboarding_access' });
   const { rows } = await db.query('SELECT * FROM onboarding_records WHERE application_id = $1', [app.id]);
   return res.json(rows[0] || null);
 }));
@@ -1147,8 +1154,10 @@ router.put('/settings', requireSuperAdmin, asyncHandler(async (req, res) => {
 router.get('/admins', requireSuperAdmin, asyncHandler(async (req, res) => {
   const { rows } = await db.query(`
     SELECT au.id AS admin_user_id, au.email, au.display_name, au.is_active,
-           (au.auth_user_id IS NOT NULL) AS linked, au.can_view_onboarding,
-           g.id AS grant_id, g.role, g.business_unit, g.department_id, d.name AS department_name
+           (au.auth_user_id IS NOT NULL) AS linked,
+           g.id AS grant_id, g.role, g.business_unit, g.department_id, d.name AS department_name,
+           -- read through jsonb so the list still works before migration 015
+           (to_jsonb(g) ->> 'can_view_onboarding')::boolean AS can_view_onboarding
       FROM admin_users au
       LEFT JOIN admin_grants g ON g.admin_user_id = au.id
       LEFT JOIN clearance_departments d ON d.id = g.department_id
@@ -1159,7 +1168,7 @@ router.get('/admins', requireSuperAdmin, asyncHandler(async (req, res) => {
 
 // POST /api/admin/admins  (rpc_admin_invite_admin)
 router.post('/admins', requireSuperAdmin, asyncHandler(async (req, res) => {
-  const { email, display_name: displayName, can_view_onboarding: viewOnboarding } = req.body || {};
+  const { email, display_name: displayName } = req.body || {};
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return res.status(400).json({ error: 'A valid email is required' });
   }
@@ -1171,16 +1180,10 @@ router.post('/admins', requireSuperAdmin, asyncHandler(async (req, res) => {
     return res.status(409).json({ error: 'An admin with this email already exists' });
   }
 
-  // Onboarding access (migration 014) starts off unless the Super Admin ticks it.
-  const { rows } = typeof viewOnboarding === 'boolean'
-    ? await db.query(
-      'INSERT INTO admin_users (email, display_name, can_view_onboarding) VALUES ($1, $2, $3) RETURNING *',
-      [email.toLowerCase(), displayName || null, viewOnboarding]
-    )
-    : await db.query(
-      'INSERT INTO admin_users (email, display_name) VALUES ($1, $2) RETURNING *',
-      [email.toLowerCase(), displayName || null]
-    );
+  const { rows } = await db.query(
+    'INSERT INTO admin_users (email, display_name) VALUES ($1, $2) RETURNING *',
+    [email.toLowerCase(), displayName || null]
+  );
   const invited = rows[0];
 
   // Power Automate notification (mirrors the original `rpc_admin_invite_admin`).
@@ -1200,7 +1203,7 @@ router.post('/admins', requireSuperAdmin, asyncHandler(async (req, res) => {
 
 // POST /api/admin/admins/:admin_user_id/grants  (rpc_admin_grant_role)
 router.post('/admins/:admin_user_id/grants', requireSuperAdmin, asyncHandler(async (req, res) => {
-  const { role, business_unit: businessUnit } = req.body || {};
+  const { role, business_unit: businessUnit, can_view_onboarding: viewOnboarding } = req.body || {};
   if (role === 'entity_admin') {
     // Explicitly Phase 2 / not implemented per spec §1.5 — refuse rather
     // than silently creating an unenforced grant.
@@ -1232,10 +1235,16 @@ router.post('/admins/:admin_user_id/grants', requireSuperAdmin, asyncHandler(asy
 
   let grant;
   try {
-    const { rows } = await db.query(
-      'INSERT INTO admin_grants (admin_user_id, role, business_unit, department_id) VALUES ($1, $2, $3, $4) RETURNING *',
-      [req.params.admin_user_id, role, keepsBu && businessUnit ? businessUnit : null, departmentId]
-    );
+    // HR Admin grants carry onboarding access (migration 015), off unless ticked.
+    const { rows } = role === 'bu_admin' && typeof viewOnboarding === 'boolean'
+      ? await db.query(
+        'INSERT INTO admin_grants (admin_user_id, role, business_unit, department_id, can_view_onboarding) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        [req.params.admin_user_id, role, businessUnit, departmentId, viewOnboarding]
+      )
+      : await db.query(
+        'INSERT INTO admin_grants (admin_user_id, role, business_unit, department_id) VALUES ($1, $2, $3, $4) RETURNING *',
+        [req.params.admin_user_id, role, keepsBu && businessUnit ? businessUnit : null, departmentId]
+      );
     grant = rows[0];
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'This person already has that role' });
@@ -1256,6 +1265,27 @@ router.post('/admins/:admin_user_id/grants', requireSuperAdmin, asyncHandler(asy
   });
 
   return res.status(201).json(grant);
+}));
+
+// PATCH /api/admin/grants/:grant_id/onboarding-access  { can_view_onboarding }
+// (migration 015) Whether this HR Admin may see onboarding details in this
+// grant's business unit. Takes effect at once.
+router.patch('/grants/:grant_id/onboarding-access', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const { can_view_onboarding: allowed } = req.body || {};
+  if (typeof allowed !== 'boolean') {
+    return res.status(400).json({ error: 'can_view_onboarding (boolean) is required' });
+  }
+  if (!UUID_RE.test(String(req.params.grant_id))) return res.status(404).json({ error: 'Grant not found' });
+  const found = await db.query('SELECT role FROM admin_grants WHERE id = $1', [req.params.grant_id]);
+  if (!found.rows.length) return res.status(404).json({ error: 'Grant not found' });
+  if (found.rows[0].role !== 'bu_admin') {
+    return res.status(400).json({ error: 'Onboarding access is set on HR Admin access only (Super Admins always have it)' });
+  }
+  const { rows } = await db.query(
+    'UPDATE admin_grants SET can_view_onboarding = $1 WHERE id = $2 RETURNING *',
+    [allowed, req.params.grant_id]
+  );
+  return res.json(rows[0]);
 }));
 
 // DELETE /api/admin/grants/:grant_id  (rpc_admin_revoke_grant)
@@ -1289,23 +1319,6 @@ router.delete('/grants/:grant_id', requireSuperAdmin, asyncHandler(async (req, r
 }));
 
 // PATCH /api/admin/admins/:admin_user_id/active  (rpc_admin_set_admin_active)
-// PATCH /api/admin/admins/:admin_user_id/onboarding-access  { can_view_onboarding }
-// (migration 014) Whether this admin may see onboarding details. Takes effect
-// at once. Super Admins see onboarding whatever this says.
-router.patch('/admins/:admin_user_id/onboarding-access', requireSuperAdmin, asyncHandler(async (req, res) => {
-  const { can_view_onboarding: allowed } = req.body || {};
-  if (typeof allowed !== 'boolean') {
-    return res.status(400).json({ error: 'can_view_onboarding (boolean) is required' });
-  }
-  if (!UUID_RE.test(String(req.params.admin_user_id))) return res.status(404).json({ error: 'Admin user not found' });
-  const { rows } = await db.query(
-    'UPDATE admin_users SET can_view_onboarding = $1 WHERE id = $2 RETURNING id AS admin_user_id, email, display_name, is_active, can_view_onboarding',
-    [allowed, req.params.admin_user_id]
-  );
-  if (rows.length === 0) return res.status(404).json({ error: 'Admin user not found' });
-  return res.json(rows[0]);
-}));
-
 router.patch('/admins/:admin_user_id/active', requireSuperAdmin, asyncHandler(async (req, res) => {
   const { is_active: isActive } = req.body || {};
   if (typeof isActive !== 'boolean') {
